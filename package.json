@@ -1,0 +1,61 @@
+{
+  "name": "securee2e",
+  "version": "0.1.0",
+  "author": {
+    "name": "Daniele Frisanco",
+    "url": "https://www.linkedin.com/in/daniele-frisanco-9589835a/"
+  },
+  "description": "Vue.js Library for Diffie-Hellman Key Exchange using Web Cryptography API.",
+  "type": "module",
+  "main": "./dist/securee2e.umd.cjs",
+  "module": "./dist/securee2e.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/securee2e.js",
+      "require": "./dist/securee2e.umd.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && vue-tsc --declaration --emitDeclarationOnly",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "vue": "^3.5.22"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^27.0.0",
+    "@types/node": "^24.6.0",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "@vue/test-utils": "^2.4.6",
+    "@vue/tsconfig": "^0.8.1",
+    "jsdom": "^27.0.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.7",
+    "vitest": "^3.2.4",
+    "vue-tsc": "^3.1.0"
+  },
+  "vitest": {
+    "environment": "jsdom",
+    "include": [
+      "__tests__/**/*.{ts,js}"
+    ],
+    "coverage": {
+      "reporter": [
+        "text",
+        "json",
+        "html"
+      ]
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "package.json",
+    "README.md"
+  ]
+}
