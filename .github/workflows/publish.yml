@@ -19,11 +19,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Set up Node.js for Build and Test
         uses: actions/setup-node@v4
         with:
-          # Using Node 20 as it is the current LTS version, best for CI
-          node-version: '20' 
+          node-version: '20' # Using LTS for stability
           cache: 'npm'
 
       - name: Install Dependencies
@@ -36,11 +35,13 @@ jobs:
         # This uses your defined "build" script in package.json
         run: npm run build
 
-      - name: Publish to NPM
+      - name: Configure NPM Registry for Publishing
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-        
-        # This step uses the ID token provided by GitHub OIDC for authorization
+          # NOTE: The 'npm token' required for publishing is handled implicitly by OIDC here.
+
+      - name: Run NPM Publish
+        # This is the separate step that executes the shell command after configuration
         run: npm publish --access public
