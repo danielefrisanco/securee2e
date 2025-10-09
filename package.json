@@ -1,6 +1,6 @@
 {
   "name": "securee2e",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": {
     "name": "Daniele Frisanco",
     "url": "https://www.linkedin.com/in/daniele-frisanco-9589835a/"
@@ -41,6 +41,9 @@
   },
   "vitest": {
     "environment": "jsdom",
+    "setupFiles": [
+      "./vitest.setup.js"
+    ],
     "include": [
       "__tests__/**/*.{ts,js}"
     ],

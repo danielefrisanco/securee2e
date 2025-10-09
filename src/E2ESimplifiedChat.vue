@@ -1,45 +1,37 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import { useDiffieHellman } from './composables/useDiffieHellman';
+import { EncryptedPayload, KeyAuthPayload } from './types/keyExchange'; // Uses the correct type import
 
-// --- Types ---
-interface KeyExchangePayload {
-    ecdhPublicKey: string;
-    ecdsaPublicKey: string;
-    signature: string;
-}
+// --- State Management ---
+const dh = useDiffieHellman();
 
-interface EncryptedMessage {
+// Local Private Key Storage (Needed to pass to deriveSecretFromRemotePayload)
+const localPrivateKey = ref<CryptoKey | null>(null);
+
+// Local Identity (Purely for context, not network authentication)
+const localId = ref(crypto.randomUUID().substring(0, 8)); 
+
+// Shared Secret and Connection Status
+const sharedSecret = ref<CryptoKey | null>(null);
+const connectionStatus = ref<'disconnected' | 'awaiting-key' | 'connected' | 'error'>('disconnected');
+const statusMessage = ref('Click "Generate Keys" to start the authenticated handshake.');
+
+// Data for Exchange
+// We will store the full result from generateLocalAuthPayload here, 
+// but extract public parts for display.
+const localAuthResult = ref<{ payload: KeyAuthPayload; keys: [CryptoKey, CryptoKey] } | null>(null);
+
+const remoteKeyExchangePayload = ref<KeyAuthPayload | null>(null);
+
+// Chat State
+interface MessageDisplay {
     iv: string;
     ciphertext: string;
     sender: 'local' | 'remote';
     decryptedText?: string; 
 }
-
-// --- State Management ---
-const dh = useDiffieHellman();
-
-// Local Identity (Purely for context, not network authentication)
-const localId = ref(crypto.randomUUID().substring(0, 8)); 
-
-// Key Pairs (Private keys are non-extractable CryptoKey objects)
-const ecdhKeyPair = ref<CryptoKeyPair | null>(null);
-const ecdsaKeyPair = ref<CryptoKeyPair | null>(null);
-
-// Shared Secret and Connection Status
-const sharedSecret = ref<CryptoKey | null>(null);
-const connectionStatus = ref<'disconnected' | 'awaiting-key' | 'connected' | 'error'>('disconnected');
-const statusMessage = ref('Click "Generate Keys" to start the handshake.');
-
-// Data for Exchange
-const localEcdhPublicKey = ref('');
-const localEcdsaPublicKey = ref('');
-const localSignature = ref('');
-
-const remoteKeyExchangePayload = ref<KeyExchangePayload | null>(null);
-
-// Chat State
-const messages = ref<EncryptedMessage[]>([]);
+const messages = ref<MessageDisplay[]>([]);
 const inputMessage = ref('');
 const chatLog = ref<string[]>([]);
 
@@ -53,41 +45,34 @@ const manualDecryptedResult = ref('');
 const isConnected = computed(() => connectionStatus.value === 'connected');
 const isAwaitingKey = computed(() => connectionStatus.value === 'awaiting-key');
 
-// --- Key Management and Handshake Functions ---
+// Expose the local payload for the textarea display
+const keyExchangePayload = computed(() => {
+    if (localAuthResult.value) {
+        return JSON.stringify(localAuthResult.value.payload, null, 2);
+    }
+    return '';
+});
+
+// --- Key Management and Handshake Functions (HIGH-LEVEL API ONLY) ---
 
 /**
- * Step 1: Generate all keys (ECDH for encryption, ECDSA for signing)
+ * Step 1: Generate all keys and the authenticated payload using a SINGLE HIGH-LEVEL CALL.
  */
 const generateKeys = async () => {
     try {
         connectionStatus.value = 'disconnected';
-        statusMessage.value = 'Generating keys...';
+        statusMessage.value = 'Generating authenticated payload...';
 
-        // 1. Generate ECDH Key Pair for encryption/derivation
-        const dhKeys = await dh.generateKeyPair();
-        ecdhKeyPair.value = dhKeys;
-
-        // 2. Generate ECDSA Key Pair for authentication/signatures
-        const signKeys = await dh.generateSigningKeys();
-        ecdsaKeyPair.value = signKeys;
-
-        // 3. Export Public Keys for transmission
-        localEcdhPublicKey.value = await dh.exportPublicKeyBase64(dhKeys.publicKey);
-        localEcdsaPublicKey.value = await dh.exportSigningPublicKeyBase64(signKeys.publicKey);
+        // HIGH-LEVEL FUNCTION 1: Generates ECDH and ECDSA keys, exports public keys, and signs.
+        const authResult = await dh.generateLocalAuthPayload();
+        localAuthResult.value = authResult;
         
-        // 4. Sign the ECDH public key using the ECDSA private key
-        if (ecdsaKeyPair.value.privateKey) {
-            localSignature.value = await dh.signPublicKey(
-                ecdsaKeyPair.value.privateKey,
-                dhKeys.publicKey
-            );
-        } else {
-            throw new Error('ECDSA Private Key not generated.');
-        }
+        // Store the ECDH Private Key needed for derivation later (keys[0])
+        localPrivateKey.value = authResult.keys[0];
 
         connectionStatus.value = 'awaiting-key';
-        statusMessage.value = `Keys generated! Share the following payload with the remote party. Your Local ID: ${localId.value}`;
-        chatLog.value.push('--- Keys Generated. Awaiting remote key. ---');
+        statusMessage.value = `Payload generated! Share this payload. Your Local ID: ${localId.value}`;
+        chatLog.value.push('--- Authenticated Keys Generated. Awaiting remote key. ---');
 
     } catch (error) {
         console.error('Key generation error:', error);
@@ -97,11 +82,12 @@ const generateKeys = async () => {
 };
 
 /**
- * Step 2: Handle receiving the remote party's key exchange payload
+ * Step 2: Handle receiving the remote party's key exchange payload.
+ * Uses a SINGLE HIGH-LEVEL CALL to verify the signature and derive the secret.
  */
-const handleRemoteKey = async (payload: KeyExchangePayload) => {
+const handleRemoteKey = async (payload: KeyAuthPayload) => {
     try {
-        if (!ecdhKeyPair.value || !ecdsaKeyPair.value) {
+        if (!localPrivateKey.value) {
             statusMessage.value = 'ERROR: Local keys must be generated first!';
             connectionStatus.value = 'error';
             return;
@@ -113,35 +99,18 @@ const handleRemoteKey = async (payload: KeyExchangePayload) => {
         }
 
         remoteKeyExchangePayload.value = payload;
-        statusMessage.value = 'Received remote key payload. Verifying signature...';
+        statusMessage.value = 'Received remote key payload. Verifying signature and deriving secret...';
 
-        // 1. Import Remote Keys
-        const importedRemoteEcdhKey = await dh.importRemotePublicKeyBase64(payload.ecdhPublicKey);
-        const importedRemoteEcdsaKey = await dh.importRemoteSigningPublicKeyBase64(payload.ecdsaPublicKey);
-
-        // 2. CRITICAL SECURITY STEP: Verify the signature
-        const isSignatureValid = await dh.verifySignature(
-            importedRemoteEcdsaKey,
-            importedRemoteEcdhKey,
-            payload.signature
+        // HIGH-LEVEL FUNCTION 2: Imports remote keys, verifies signature, and derives shared secret.
+        const secret = await dh.deriveSecretFromRemotePayload(
+            localPrivateKey.value, // Pass the local ECDH private key
+            payload                  // Pass the full remote payload
         );
-
-        if (!isSignatureValid) {
-            connectionStatus.value = 'error';
-            statusMessage.value = 'SECURITY WARNING: Signature verification FAILED. Key exchange aborted (MITM attack possible).';
-            chatLog.value.push('!!! SECURITY FAIL: Remote key signature is INVALID. ABORTING HANDSHAKE. !!!');
-            return;
-        }
-
-        // 3. If valid, derive shared secret
-        const secret = await dh.deriveSharedSecret(
-            ecdhKeyPair.value.privateKey,
-            importedRemoteEcdhKey
-        );
+        
         sharedSecret.value = secret;
 
         connectionStatus.value = 'connected';
-        statusMessage.value = 'Key verified and Shared Secret derived! Connection secured. Start chatting!';
+        statusMessage.value = 'Signature verified and Shared Secret derived! Connection secured. Start chatting!';
         chatLog.value.push('--- SIGNATURE VERIFIED. Connection is SECURE. ---');
     } catch (error) {
         console.error('Handshake error:', error);
@@ -151,27 +120,29 @@ const handleRemoteKey = async (payload: KeyExchangePayload) => {
 };
 
 /**
- * Step 3: Handle sending and receiving encrypted messages
+ * Step 3: Handle sending and receiving encrypted messages.
+ * Uses HIGH-LEVEL ENCRYPT/DECRYPT MESSAGING FUNCTIONS.
  */
 const sendMessage = async () => {
     if (!isConnected.value || !sharedSecret.value || !inputMessage.value.trim()) return;
 
     try {
         const textToSend = inputMessage.value;
-        const encrypted = await dh.encryptData(sharedSecret.value, textToSend);
         
-        // --- FIX: Break log into multiple lines to prevent environment truncation ---
+        // HIGH-LEVEL FUNCTION 3: Encrypt message
+        const encrypted = await dh.encryptMessage(sharedSecret.value, textToSend);
+        
+        // Log the IV and Ciphertext on separate lines to prevent truncation
         chatLog.value.push(`[SENT/ENCRYPTED]`);
         chatLog.value.push(`  IV: ${encrypted.iv}`);
         chatLog.value.push(`  Ciphertext: ${encrypted.ciphertext}`);
-        // -------------------------------------------------------------------------
        
         // Add local message to messages state for display immediately
          messages.value.push({
             iv: encrypted.iv,
             ciphertext: encrypted.ciphertext,
             sender: 'local',
-            decryptedText: textToSend // Show the decrypted text immediately for the local user
+            decryptedText: textToSend 
         });
 
         inputMessage.value = '';
@@ -183,7 +154,8 @@ const sendMessage = async () => {
 };
 
 /**
- * Manually decrypts a ciphertext string after completing the handshake
+ * Manually decrypts a ciphertext string after completing the handshake.
+ * Uses HIGH-LEVEL DECRYPT MESSAGING FUNCTION.
  */
 const manualDecrypt = async () => {
     manualDecryptedResult.value = '';
@@ -198,7 +170,10 @@ const manualDecrypt = async () => {
     }
 
     try {
-        const text = await dh.decryptData(sharedSecret.value, manualIv.value, manualCiphertext.value);
+        // HIGH-LEVEL FUNCTION 4: Decrypt message
+        const decryptedPayload: EncryptedPayload = { iv: manualIv.value, ciphertext: manualCiphertext.value };
+        const text = await dh.decryptMessage(sharedSecret.value, decryptedPayload);
+        
         manualDecryptedResult.value = `DECRYPT SUCCESS: ${text}`;
         chatLog.value.push(`[MANUAL DECRYPT SUCCESS]: "${text}"`);
 
@@ -222,30 +197,15 @@ const manualDecrypt = async () => {
 
 // --- Utilities ---
 
-const keyExchangePayload = computed(() => {
-    // This runs as long as the local public keys exist
-    if (localEcdhPublicKey.value && localEcdsaPublicKey.value && localSignature.value) {
-        return JSON.stringify({
-            ecdhPublicKey: localEcdhPublicKey.value,
-            ecdsaPublicKey: localEcdsaPublicKey.value,
-            signature: localSignature.value,
-        }, null, 2);
-    }
-    return '';
-});
-
 const reset = () => {
     // Clear all state
-    ecdhKeyPair.value = null;
-    ecdsaKeyPair.value = null;
+    localPrivateKey.value = null;
     sharedSecret.value = null;
+    localAuthResult.value = null;
     messages.value = [];
     chatLog.value = [];
     remoteKeyExchangePayload.value = null;
     inputMessage.value = '';
-    localEcdhPublicKey.value = '';
-    localEcdsaPublicKey.value = '';
-    localSignature.value = '';
     manualCiphertext.value = '';
     manualIv.value = '';
     manualDecryptedResult.value = '';
@@ -258,8 +218,8 @@ const reset = () => {
 
 <template>
     <div class="chat-container">
-        <h1 class="text-3xl font-bold mb-4 text-gray-800">Pure E2E Crypto Demo</h1>
-        <p class="text-sm mb-4 text-gray-600">This demo uses client-side encryption only. Messages must be manually relayed.</p>
+        <h1 class="text-3xl font-bold mb-4 text-gray-800">Simplified E2E Crypto Demo (High-Level API)</h1>
+        <p class="text-sm mb-4 text-gray-600">This demo uses only the **4 High-Level API functions** to perform the full authenticated key exchange and messaging, simplifying component logic.</p>
         <p class="text-xs mb-2 text-gray-400">Your Local ID: {{ localId }}</p>
 
         <!-- Status Bar -->
@@ -283,7 +243,7 @@ const reset = () => {
             </button>
             <button
                 @click="reset"
-                :disabled="connectionStatus === 'disconnected' && !ecdhKeyPair"
+                :disabled="connectionStatus === 'disconnected' && !localAuthResult"
                 class="btn-secondary"
             >
                 Reset Connection
@@ -293,7 +253,7 @@ const reset = () => {
         <!-- Key Exchange Section -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             <!-- Local Payload (To share) -->
-            <div v-if="ecdhKeyPair" class="key-card">
+            <div v-if="localAuthResult" class="key-card">
                 <h3 class="text-lg font-semibold mb-2 text-blue-600">Your Key Exchange Payload (Send this)</h3>
                 <textarea
                     :value="keyExchangePayload"
@@ -358,7 +318,6 @@ const reset = () => {
         <!-- Chat Window -->
         <div class="chat-window mb-4">
             <!-- System/Security Log -->
-            <!-- The 'break-all' class already applied ensures wrapping, but we'll use multiple <p> tags for better separation -->
             <div v-for="(log, index) in chatLog" :key="`log-${index}`" class="mt-1">
                 <p class="text-xs font-mono text-gray-500 italic break-all">{{ log }}</p>
             </div>

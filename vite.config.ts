@@ -7,6 +7,12 @@ export default defineConfig({
   test: {
     globals: true, // Use global APIs like 'it', 'expect'
     environment: 'jsdom', // CRITICAL: Enables browser environment for 'window'
+    // CRITICAL: Tells Vitest where to find the setup file
+    setupFiles: [
+      './vitest.setup.js'
+    ],
+    // Glob patterns for finding test files
+    include: ['__tests__/**/*.{ts,js}'],
   },
   build: {
     lib: {

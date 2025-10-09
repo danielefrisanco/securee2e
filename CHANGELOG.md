@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1] - 2025-10-09
+
+### Added
+* **High-Level API Wrappers (Unified Workflow):** Introduced a simplified API layer to manage the entire authenticated key exchange and messaging process, wrapping the low-level crypto functions.
+    * `generateLocalAuthPayload()`: Generates all local ECDH/ECDSA keys and the authenticated public payload for sharing.
+    * `deriveSecretFromRemotePayload()`: Handles importing remote keys, performing the essential MITM signature verification check, and deriving the shared secret.
+    * `encryptMessage()`: High-level function to securely encrypt a plaintext message using the shared secret.
+    * `decryptMessage()`: High-level function to decrypt a received encrypted payload.
+
 ## [0.3.0] - 2025-10-09
 
 ### Added

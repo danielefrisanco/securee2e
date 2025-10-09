@@ -7,8 +7,10 @@
 
 *   **ECDH P-256 Key Agreement:** Uses the standard Elliptic Curve Diffie-Hellman with the P-256 curve for robust key agreement.
     
-*   **ECDSA P-256 Key Authentication (New!):** Uses Elliptic Curve Digital Signature Algorithm with the P-256 curve to sign and verify public keys, **preventing Man-in-the-Middle (MITM) attacks.**
+*   **ECDSA P-256 Key Authentication:** Uses Elliptic Curve Digital Signature Algorithm with the P-256 curve to sign and verify public keys, **preventing Man-in-the-Middle (MITM) attacks.**
     
+*   **High-Level API Wrappers (v0.3.1):** Simplified functions (`generateLocalAuthPayload`, `deriveSecretFromRemotePayload`, etc.) abstract the 6-step handshake into two simple calls, dramatically simplifying integration.
+
 *   **AES-256 GCM Encryption:** Employs the highly secure AES-GCM (256-bit) algorithm for encrypting messages.
     
 *   **Security Focused:** Private keys are generated as **non-extractable** by default.
@@ -44,8 +46,57 @@ The library exchanges data using these required structures:
  | ----- | ----- | ----- | 
 | **KeyAuthPayload** | `{ ecdhPublicKey: string, ecdsaPublicKey: string, signature: string }` | The full payload transmitted during the key exchange handshake. | 
 | **EncryptedPayload** | `{ iv: string, ciphertext: string }` | The result of `encryptData`. Both fields are Base64 strings and are required for decryption. |
+| **LocalAuthResult** | `{ payload: KeyAuthPayload, keys: [CryptoKey, CryptoKey] }` | Return object from the high-level key generation function. Contains the sharable payload and local private keys. |
 
-📖 Usage:The Authenticated E2E Workflow
+🚀 High-Level Usage: Simplified E2E Workflow (v0.3.1)
+-------------------------------------------------------
+With the introduction of the high-level wrappers, the entire authenticated key exchange is reduced from six manual steps to a single `deriveSecretFromRemotePayload` call.
+
+This method handles key importing, signature verification (MITM protection), and secret derivation internally.
+
+```typescript
+import { useDiffieHellman } from 'securee2e';
+
+const {
+  // High-Level functions only
+  generateLocalAuthPayload,
+  deriveSecretFromRemotePayload,
+  encryptMessage,
+  decryptMessage
+} = useDiffieHellman();
+
+
+async function runSimplifiedExchange(bobPayload: KeyAuthPayload) {
+
+  // 1. ALICE'S KEY GENERATION (1 call)
+  const aliceLocalAuth = await generateLocalAuthPayload();
+  const alicePayload = aliceLocalAuth.payload;
+  const [aliceEcdhPrivateKey] = aliceLocalAuth.keys;
+
+  // 2. BOB'S PAYLOAD IS RECEIVED
+  // (Assuming bobPayload is a valid KeyAuthPayload received from the network)
+
+  // 3. DERIVE SHARED SECRET (1 call: imports, verifies, and derives)
+  const aliceSharedSecret = await deriveSecretFromRemotePayload(
+      aliceEcdhPrivateKey,
+      bobPayload
+  );
+  
+  // NOTE: If the signature verification fails, this function throws an error.
+
+  // 4. ENCRYPT & DECRYPT
+  const plaintext = "This is the simplified secure message.";
+  const encryptedPayload = await encryptMessage(aliceSharedSecret, plaintext);
+
+  // Simulate Bob decrypting using his identical shared secret
+  // (Assuming Bob has his identical sharedSecret derived from Alice's payload)
+  const decryptedMessage = await decryptMessage(aliceSharedSecret, encryptedPayload);
+
+  console.log("Decrypted Message:", decryptedMessage); 
+}
+```
+
+📖 Low-Level Usage: The Authenticated E2E Workflow (6 Steps)
 -------------------------------------------------------
 
 The E2E process now requires key generation for _both_ encryption (ECDH) and authentication (ECDSA) and involves six sequential steps:
