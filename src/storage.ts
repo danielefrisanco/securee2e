@@ -1,68 +1,95 @@
 /**
- * Defines the storable format for the Long-Term Identity Key (LTID) set.
- * Keys must be stored in the standardized JSON Web Key (JWK) format 
- * so they can be securely exported and imported from Web Crypto objects.
+ * LTIDKeySet: Defines the structure for serializing and storing the Long-Term Identity (LTID) keys.
+ * Keys are stored as JWK strings since they must be exported from CryptoKey objects 
+ * for persistence (CryptoKey objects cannot be stored directly).
  */
 export interface LTIDKeySet {
-    /** The ECDSA Signing Private Key (JWK format for storage). */
-    ecdsaPrivateKeyJwk: JsonWebKey;
-    /** The ECDSA Signing Public Key (JWK format for storage). */
+    // The ECDSA Private Key (non-extractable by default, but required to be extractable for storage)
+    ecdsaPrivateKeyJwk: JsonWebKey; 
+    // The ECDSA Public Key
     ecdsaPublicKeyJwk: JsonWebKey;
 }
 
 /**
- * Interface for the secure key storage provider.
- * This abstraction layer allows the library consumer (the developer)
- * to plug in their preferred persistence mechanism (e.g., localStorage, 
- * IndexedDB, Firestore) for long-term keys.
+ * IKeyStorageProvider: The interface that all storage providers must implement.
+ * This enables swappable persistence logic (In-Memory, LocalStorage, IndexedDB, etc.).
  */
 export interface IKeyStorageProvider {
-    /**
-     * Saves the long-term identity key set.
-     * @param keySet The LTID keys in storable JWK format.
-     */
-    save(keySet: LTIDKeySet): Promise<void>;
-
-    /**
-     * Loads the long-term identity key set.
-     * @returns The LTID keys in storable JWK format, or null if not found.
-     */
+    // Load the key set from storage. Returns null if no key is found.
     load(): Promise<LTIDKeySet | null>;
+    // Save the key set to storage.
+    save(keys: LTIDKeySet): Promise<void>;
+    // Clears the key set from storage (used for resetting identity).
+    clear(): Promise<void>; 
 }
 
 /**
- * A simple, default implementation for the key storage provider that uses 
- * an in-memory variable. This is suitable for testing or sessions where
- * persistence is not required (keys are lost on refresh/page close).
+ * InMemoryStorageProvider: The default fallback provider. Keys are lost on page refresh.
  */
 export class InMemoryStorageProvider implements IKeyStorageProvider {
-    private keys: LTIDKeySet | null = null;
-
-    async save(keySet: LTIDKeySet): Promise<void> {
-        this.keys = JSON.parse(JSON.stringify(keySet));
-        console.log("LTID Keys saved to in-memory store.");
-    }
+    private store: LTIDKeySet | null = null;
+    private storageKey: string = 'securee2e-ltid-inmemory-mock'; // Just a placeholder key
 
     async load(): Promise<LTIDKeySet | null> {
-        if (this.keys) {
-            console.log("LTID Keys loaded from in-memory store.");
-            return JSON.parse(JSON.stringify(this.keys));
+        // Return a deep clone to prevent direct manipulation of the stored object
+        return this.store ? JSON.parse(JSON.stringify(this.store)) : null;
+    }
+
+    async save(keys: LTIDKeySet): Promise<void> {
+        this.store = keys;
+    }
+    
+    async clear(): Promise<void> {
+        this.store = null;
+    }
+}
+
+/**
+ * LocalStorageProvider (New v0.4.0 Default): Persists keys using the browser's localStorage.
+ */
+export class LocalStorageProvider implements IKeyStorageProvider {
+    private storageKey: string = 'securee2e-ltid-v0-4-0'; 
+
+    async load(): Promise<LTIDKeySet | null> {
+        const stored = localStorage.getItem(this.storageKey);
+        if (stored) {
+            try {
+                return JSON.parse(stored) as LTIDKeySet;
+            } catch (e) {
+                console.error("Failed to parse stored LTID key set from localStorage:", e);
+                // Clear corrupted data
+                localStorage.removeItem(this.storageKey);
+                return null;
+            }
         }
         return null;
     }
+
+    async save(keys: LTIDKeySet): Promise<void> {
+        // Since CryptoKey objects were exported as JWKs, they are now plain JS objects 
+        // and safe to serialize as JSON.
+        localStorage.setItem(this.storageKey, JSON.stringify(keys));
+    }
+    
+    async clear(): Promise<void> {
+        localStorage.removeItem(this.storageKey);
+    }
 }
 
-// Global state variable holding the currently active storage implementation.
-// Defaults to the in-memory provider.
-export let currentStorageProvider: IKeyStorageProvider = new InMemoryStorageProvider();
+
+// --- Swappable Provider System ---
+
+// Set LocalStorageProvider as the new default
+export let currentStorageProvider: IKeyStorageProvider = new LocalStorageProvider();
 
 /**
- * Public function exposed by the library to allow developers to set 
- * their custom persistence mechanism (e.g., Firestore, localStorage).
- * This function is now defined here for better testability.
- * @param provider The new storage provider implementation.
+ * Allows the user to inject a custom storage provider (e.g., IndexedDB, Firestore, or back to In-Memory).
+ * This must be called before the first use of useDiffieHellman().
+ * @param provider An instance of a class implementing IKeyStorageProvider.
  */
-export const setCurrentStorageProvider = (provider: IKeyStorageProvider) => {
+export function setCurrentStorageProvider(provider: IKeyStorageProvider): void {
+    if (!provider || typeof provider.load !== 'function' || typeof provider.save !== 'function') {
+        throw new Error("Invalid storage provider provided. Must implement IKeyStorageProvider.");
+    }
     currentStorageProvider = provider;
-    console.log("securee2e: Storage provider updated.");
-};
+}

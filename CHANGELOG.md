@@ -1,4 +1,11 @@
 # Changelog
+## [0.4.0] - 2025-10-10
+### Added
+* **Key Persistence (Default):** The Long-Term Identity (LTID) keys are now persistent by default, surviving page refreshes and browser restarts.
+
+* **LocalStorageProvider:** Introduced `LocalStorageProvider` which saves LTID keys to `window.localStorage`. This is now the default storage provider.
+
+* **Swappable Storage Providers:** Implemented the `setCurrentStorageProvider(provider)` function and the `IKeyStorageProvider` interface, allowing users to easily swap the default storage mechanism (e.g., switching back to in-memory, or implementing custom database storage).
 
 ## [0.3.4] - 2025-10-10
 

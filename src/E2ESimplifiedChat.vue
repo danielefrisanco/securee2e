@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useDiffieHellman } from './composables/useDiffieHellman';
-import { EncryptedPayload, KeyAuthPayload } from './types/keyExchange'; // Uses the correct type import
+import { EncryptedPayload, KeyAuthPayload } from './types/keyExchange'; 
+import { setCurrentStorageProvider, InMemoryStorageProvider, IKeyStorageProvider, LocalStorageProvider } from './storage';
 
 // --- State Management ---
 const dh = useDiffieHellman();
@@ -18,13 +19,27 @@ const connectionStatus = ref<'disconnected' | 'awaiting-key' | 'connected' | 'er
 const statusMessage = ref('Click "Generate Keys" to start the authenticated handshake.');
 
 // Data for Exchange
-// We will store the full result from generateLocalAuthPayload here, 
-// but extract public parts for display.
 const localAuthResult = ref<{ payload: KeyAuthPayload; keys: [CryptoKey, CryptoKey] } | null>(null);
-
 const remoteKeyExchangePayload = ref<KeyAuthPayload | null>(null);
 
-// Chat State
+// --- Storage State (NEW for v0.4.0) ---
+const currentProviderName = ref('LocalStorageProvider');
+const storageMessage = ref('Keys persist across refreshes (LocalStorage default).');
+
+// --- Storage Provider Logic ---
+
+const swapToProvider = (provider: IKeyStorageProvider, name: string, message: string) => {
+    // If the connection is active, reset it first to ensure keys are loaded correctly
+    if (connectionStatus.value !== 'disconnected' || localAuthResult.value) {
+        reset(); 
+    }
+    setCurrentStorageProvider(provider);
+    currentProviderName.value = name;
+    storageMessage.value = message;
+    statusMessage.value = 'Storage provider switched. Generate new keys to test persistence.';
+};
+
+// --- Chat State ---
 interface MessageDisplay {
     iv: string;
     ciphertext: string;
@@ -63,7 +78,7 @@ const generateKeys = async () => {
         connectionStatus.value = 'disconnected';
         statusMessage.value = 'Generating authenticated payload...';
 
-        // HIGH-LEVEL FUNCTION 1: Generates ECDH and ECDSA keys, exports public keys, and signs.
+        // HIGH-LEVEL FUNCTION 1: Generates ECDH and signs with LTID keys (which are managed internally).
         const authResult = await dh.generateLocalAuthPayload();
         localAuthResult.value = authResult;
         
@@ -71,8 +86,8 @@ const generateKeys = async () => {
         localPrivateKey.value = authResult.keys[0];
 
         connectionStatus.value = 'awaiting-key';
-        statusMessage.value = `Payload generated! Share this payload. Your Local ID: ${localId.value}`;
-        chatLog.value.push('--- Authenticated Keys Generated. Awaiting remote key. ---');
+        statusMessage.value = `Payload generated! Share this payload. Your Local ID: ${localId.value}. LTID Key loaded from ${currentProviderName.value}.`;
+        chatLog.value.push(`--- Authenticated Keys Generated. LTID from ${currentProviderName.value}. ---`);
 
     } catch (error) {
         console.error('Key generation error:', error);
@@ -83,7 +98,6 @@ const generateKeys = async () => {
 
 /**
  * Step 2: Handle receiving the remote party's key exchange payload.
- * Uses a SINGLE HIGH-LEVEL CALL to verify the signature and derive the secret.
  */
 const handleRemoteKey = async (payload: KeyAuthPayload) => {
     try {
@@ -121,7 +135,6 @@ const handleRemoteKey = async (payload: KeyAuthPayload) => {
 
 /**
  * Step 3: Handle sending and receiving encrypted messages.
- * Uses HIGH-LEVEL ENCRYPT/DECRYPT MESSAGING FUNCTIONS.
  */
 const sendMessage = async () => {
     if (!isConnected.value || !sharedSecret.value || !inputMessage.value.trim()) return;
@@ -155,7 +168,6 @@ const sendMessage = async () => {
 
 /**
  * Manually decrypts a ciphertext string after completing the handshake.
- * Uses HIGH-LEVEL DECRYPT MESSAGING FUNCTION.
  */
 const manualDecrypt = async () => {
     manualDecryptedResult.value = '';
@@ -221,6 +233,28 @@ const reset = () => {
         <h1 class="text-3xl font-bold mb-4 text-gray-800">Simplified E2E Crypto Demo (High-Level API)</h1>
         <p class="text-sm mb-4 text-gray-600">This demo uses only the **4 High-Level API functions** to perform the full authenticated key exchange and messaging, simplifying component logic.</p>
         <p class="text-xs mb-2 text-gray-400">Your Local ID: {{ localId }}</p>
+
+        <!-- Storage Provider Control (NEW for v0.4.0) -->
+        <div class="p-3 mb-4 rounded-lg border-l-4 border-yellow-500 bg-yellow-50 text-yellow-800 text-sm">
+            <strong class="font-bold">LTID Storage: {{ currentProviderName }}</strong>
+            <p class="text-xs italic mb-2">{{ storageMessage }}</p>
+            <div class="flex space-x-2">
+                <button 
+                    @click="swapToProvider(new LocalStorageProvider(), 'LocalStorageProvider', 'Keys persist across refreshes (Default).')"
+                    :disabled="currentProviderName === 'LocalStorageProvider'"
+                    class="btn-tiny-yellow"
+                >
+                    Use Persistent (LocalStorage)
+                </button>
+                <button 
+                    @click="swapToProvider(new InMemoryStorageProvider(), 'InMemoryStorageProvider', 'Keys will be lost on page refresh!')"
+                    :disabled="currentProviderName === 'InMemoryStorageProvider'"
+                    class="btn-tiny-yellow"
+                >
+                    Use Transient (In-Memory)
+                </button>
+            </div>
+        </div>
 
         <!-- Status Bar -->
         <div class="status-bar" :class="{
@@ -405,6 +439,10 @@ const reset = () => {
 
 .btn-primary-indigo {
     @apply bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-150 ease-in-out shadow-md disabled:opacity-50;
+}
+
+.btn-tiny-yellow {
+    @apply bg-yellow-400 hover:bg-yellow-500 text-yellow-900 font-semibold py-1 px-2 text-xs rounded-lg transition duration-150 ease-in-out shadow-sm disabled:opacity-50;
 }
 
 /* Base styles for the entire app */

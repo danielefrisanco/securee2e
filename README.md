@@ -98,6 +98,37 @@ async function runSimplifiedExchange(bobPayload: KeyAuthPayload) {
   console.log("Decrypted Message:", decryptedMessage); 
 }
 ```
+### 💾 Persistence and Key Management (v0.4.0)
+
+With version `0.4.0`, your Long-Term Identity (LTID) keys are now **persistent** by default, meaning they survive page refreshes and browser restarts.
+
+The library achieves this using the **Provider Pattern** based on the `IKeyStorageProvider` interface.
+
+| Default Provider | Persistence | Notes | 
+ | ----- | ----- | ----- | 
+| **LocalStorageProvider** (NEW DEFAULT) | **Persistent** | Saves LTID keys to `window.localStorage`. Safe and effective for client-side persistence. | 
+| **InMemoryStorageProvider** (Fallback) | Transient | Keys are lost when the page is closed/refreshed. | 
+
+#### Swapping Storage Providers
+
+While the default is `LocalStorageProvider`, you can inject any custom storage solution that implements `IKeyStorageProvider` (e.g., to use IndexedDB, or a remote server).
+
+To switch providers, import `setCurrentStorageProvider` and your chosen provider class *before* calling `useDiffieHellman()`.
+
+```typescript
+import { setCurrentStorageProvider, InMemoryStorageProvider, IKeyStorageProvider } from 'securee2e';
+
+// Example: Switch back to non-persistent, in-memory storage
+setCurrentStorageProvider(new InMemoryStorageProvider());
+
+// Example: If you wrote a custom provider
+// class IndexedDBProvider implements IKeyStorageProvider { ... }
+// setCurrentStorageProvider(new IndexedDBProvider());
+
+// Now, useDiffieHellman() will use the new provider instance
+const { generateLocalAuthPayload } = useDiffieHellman();
+
+```
 
 📖 Low-Level Usage: The Authenticated E2E Workflow (6 Steps)
 -------------------------------------------------------
