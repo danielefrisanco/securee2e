@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.2] - 2025-10-10
+
+### 📦 Maintenance & Packaging
+- **Licensing:** Added the permissive MIT License to the package to ensure easy adoption by other projects.
+
+- **Package Optimization:** Implemented the `"files"` exclusion list in `package.json` to drastically reduce the size of the published package by excluding all development artifacts (tests, examples, configuration).
+
+- **Module Compatibility:** Added the `"exports"` mapping to `package.json` for superior CJS/ESM dual-package support, ensuring seamless module resolution across different build systems.
+
 ## [0.3.1] - 2025-10-09
 
 ### Added

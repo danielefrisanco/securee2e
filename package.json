@@ -1,19 +1,20 @@
 {
   "name": "securee2e",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "author": {
     "name": "Daniele Frisanco",
     "url": "https://www.linkedin.com/in/daniele-frisanco-9589835a/"
   },
-  "description": "Vue.js Library for Diffie-Hellman Key Exchange using Web Cryptography API.",
+  "description": "Vue 3 composable for secure End-to-End Encryption (E2E) using Web Crypto API, featuring ECDH and authenticated key exchange with ECDSA.",
+  "license": "MIT",
   "type": "module",
-  "main": "./dist/securee2e.umd.cjs",
-  "module": "./dist/securee2e.js",
+  "main": "./dist/securee2e.js",
+  "module": "./dist/securee2e.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/securee2e.js",
-      "require": "./dist/securee2e.umd.cjs",
+      "import": "./dist/securee2e.mjs",
+      "require": "./dist/securee2e.js",
       "types": "./dist/index.d.ts"
     }
   },
@@ -57,8 +58,16 @@
   },
   "files": [
     "dist",
-    "src",
-    "package.json",
-    "README.md"
-  ]
+    "src/composables/useDiffieHellman.ts",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "keywords": [
+    "vue",
+    "crypto",
+    "e2e",
+    "diffie-hellman",
+    "aes-gcm",
+    "ecdsa"
+  ],
 }
