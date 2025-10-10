@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { useDiffieHellman } from './composables/useDiffieHellman';
+import { ref, computed } from 'vue';
+// NOTE: Assuming useDiffieHellman is correctly imported from a local path
+import { useDiffieHellman, RuntimeLTIDKeys } from './composables/useDiffieHellman'; 
 
 // --- Types ---
 interface KeyExchangePayload {
@@ -24,7 +25,10 @@ const localId = ref(crypto.randomUUID().substring(0, 8));
 
 // Key Pairs (Private keys are non-extractable CryptoKey objects)
 const ecdhKeyPair = ref<CryptoKeyPair | null>(null);
-const ecdsaKeyPair = ref<CryptoKeyPair | null>(null);
+
+// NEW: Long-Term Identity Keys for signing/verification (LTID)
+// This structure holds the persistent ECDSA keys loaded/generated from storage.
+const ltidKeys = ref<RuntimeLTIDKeys | null>(null); 
 
 // Shared Secret and Connection Status
 const sharedSecret = ref<CryptoKey | null>(null);
@@ -56,33 +60,36 @@ const isAwaitingKey = computed(() => connectionStatus.value === 'awaiting-key');
 // --- Key Management and Handshake Functions ---
 
 /**
- * Step 1: Generate all keys (ECDH for encryption, ECDSA for signing)
+ * Step 1: Generate ephemeral ECDH keys and load/generate persistent LTID (ECDSA) keys.
  */
 const generateKeys = async () => {
     try {
         connectionStatus.value = 'disconnected';
         statusMessage.value = 'Generating keys...';
 
-        // 1. Generate ECDH Key Pair for encryption/derivation
+        // 1. Load/Generate LTID (ECDSA) Key Pair for authentication/signatures
+        // This handles the necessary storage/persistence of the signing key.
+        const longTermKeys = await dh.generateLongTermIdentityKeys();
+        ltidKeys.value = longTermKeys;
+
+        // 2. Generate Ephemeral ECDH Key Pair for encryption/derivation
         const dhKeys = await dh.generateKeyPair();
         ecdhKeyPair.value = dhKeys;
 
-        // 2. Generate ECDSA Key Pair for authentication/signatures
-        const signKeys = await dh.generateSigningKeys();
-        ecdsaKeyPair.value = signKeys;
-
         // 3. Export Public Keys for transmission
         localEcdhPublicKey.value = await dh.exportPublicKeyBase64(dhKeys.publicKey);
-        localEcdsaPublicKey.value = await dh.exportSigningPublicKeyBase64(signKeys.publicKey);
+        // Use the LTID public key for the payload
+        localEcdsaPublicKey.value = await dh.exportSigningPublicKeyBase64(ltidKeys.value.ecdsaPublicKey);
         
-        // 4. Sign the ECDH public key using the ECDSA private key
-        if (ecdsaKeyPair.value.privateKey) {
+        // 4. Sign the ephemeral ECDH public key using the LTID private key
+        if (ltidKeys.value.ecdsaPrivateKey) {
             localSignature.value = await dh.signPublicKey(
-                ecdsaKeyPair.value.privateKey,
-                dhKeys.publicKey
+                ltidKeys.value.ecdsaPrivateKey, // LTID private key
+                dhKeys.publicKey // Ephemeral ECDH public key
             );
         } else {
-            throw new Error('ECDSA Private Key not generated.');
+            // This should not happen if generateLongTermIdentityKeys succeeds
+            throw new Error('LTID Private Key not available.');
         }
 
         connectionStatus.value = 'awaiting-key';
@@ -101,7 +108,7 @@ const generateKeys = async () => {
  */
 const handleRemoteKey = async (payload: KeyExchangePayload) => {
     try {
-        if (!ecdhKeyPair.value || !ecdsaKeyPair.value) {
+        if (!ecdhKeyPair.value || !ltidKeys.value) { // Check for LTID keys as well
             statusMessage.value = 'ERROR: Local keys must be generated first!';
             connectionStatus.value = 'error';
             return;
@@ -117,6 +124,7 @@ const handleRemoteKey = async (payload: KeyExchangePayload) => {
 
         // 1. Import Remote Keys
         const importedRemoteEcdhKey = await dh.importRemotePublicKeyBase64(payload.ecdhPublicKey);
+        // The imported ECDSA key is the remote party's LTID public key
         const importedRemoteEcdsaKey = await dh.importRemoteSigningPublicKeyBase64(payload.ecdsaPublicKey);
 
         // 2. CRITICAL SECURITY STEP: Verify the signature
@@ -237,7 +245,7 @@ const keyExchangePayload = computed(() => {
 const reset = () => {
     // Clear all state
     ecdhKeyPair.value = null;
-    ecdsaKeyPair.value = null;
+    ltidKeys.value = null; // NEW: Clear LTID state
     sharedSecret.value = null;
     messages.value = [];
     chatLog.value = [];
@@ -302,7 +310,7 @@ const reset = () => {
                     class="w-full p-2 border border-gray-300 rounded-lg font-mono text-xs bg-gray-50 resize-none"
                     placeholder="Payload will appear here after key generation..."
                 ></textarea>
-                <p class="mt-2 text-xs text-gray-500">Includes: ECDH Public Key, ECDSA Public Key, and Signature.</p>
+                <p class="mt-2 text-xs text-gray-500">Includes: Ephemeral ECDH Public Key, LTID ECDSA Public Key, and Signature.</p>
             </div>
             <!-- Display a placeholder message if keys haven't been generated yet -->
             <div v-else class="key-card text-center p-8 bg-gray-100 text-gray-500 flex items-center justify-center h-full">
@@ -313,7 +321,7 @@ const reset = () => {
             <div class="key-card">
                 <h3 class="text-lg font-semibold mb-2 text-purple-600">Remote Payload (Paste Here)</h3>
                 <textarea
-                    @input="event => { try { handleRemoteKey(JSON.parse(event.target.value)) } catch (e) { /* Ignore invalid JSON during typing */ } }"
+                    @input="event => { try { handleRemoteKey(JSON.parse((event.target as HTMLTextAreaElement).value)) } catch (e) { /* Ignore invalid JSON during typing */ } }"
                     rows="8"
                     class="w-full p-2 border border-gray-300 rounded-lg font-mono text-xs bg-white resize-none"
                     placeholder="Paste the remote party's payload JSON here to start derivation..."

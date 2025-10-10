@@ -1,4 +1,4 @@
-## securee2e: Vue Composable for End-to-End Encryption (v0.3.0)
+## securee2e: Vue Composable for End-to-End Encryption
 
 `securee2e` is a straightforward Vue 3 composable built on the native **Web Cryptography API** to facilitate secure **Diffie-Hellman Key Exchange (ECDH)** and **AES-GCM** symmetric encryption, **now with ECDSA signature for public key authentication.**
 
@@ -46,19 +46,17 @@ The library exchanges data using these required structures:
  | ----- | ----- | ----- | 
 | **KeyAuthPayload** | `{ ecdhPublicKey: string, ecdsaPublicKey: string, signature: string }` | The full payload transmitted during the key exchange handshake. | 
 | **EncryptedPayload** | `{ iv: string, ciphertext: string }` | The result of `encryptData`. Both fields are Base64 strings and are required for decryption. |
-| **LocalAuthResult** | `{ payload: KeyAuthPayload, keys: [CryptoKey, CryptoKey] }` | Return object from the high-level key generation function. Contains the sharable payload and local private keys. |
+| **LocalAuthResult** | `{ payload: KeyAuthPayload, ecdhPrivateKey: CryptoKey }` | Return object from the high-level key generation function. Contains the sharable payload and local ephemeral private key. |
 
-🚀 High-Level Usage: Simplified E2E Workflow (v0.3.1)
+🚀 High-Level Usage: Simplified E2E Workflow (v0.3.4)
 -------------------------------------------------------
-With the introduction of the high-level wrappers, the entire authenticated key exchange is reduced from six manual steps to a single `deriveSecretFromRemotePayload` call.
-
-This method handles key importing, signature verification (MITM protection), and secret derivation internally.
+With the introduction of the high-level wrappers, the entire authenticated key exchange is reduced to a few calls. This approach enforces authentication (LTID signing) to prevent Man-in-the-Middle attacks.
 
 ```typescript
-import { useDiffieHellman } from 'securee2e';
+import { useDiffieHellman, KeyAuthPayload } from 'securee2e';
 
 const {
-  // High-Level functions only
+  // High-Level functions:
   generateLocalAuthPayload,
   deriveSecretFromRemotePayload,
   encryptMessage,
@@ -68,23 +66,28 @@ const {
 
 async function runSimplifiedExchange(bobPayload: KeyAuthPayload) {
 
-  // 1. ALICE'S KEY GENERATION (1 call)
-  const aliceLocalAuth = await generateLocalAuthPayload();
-  const alicePayload = aliceLocalAuth.payload;
-  const [aliceEcdhPrivateKey] = aliceLocalAuth.keys;
+  // 1. ALICE'S AUTHENTICATED KEY GENERATION (1 call)
+  // The LTID key is automatically loaded/generated and used to sign the payload.
+  const aliceLocalAuth = await generateLocalAuthPayload(); 
 
-  // 2. BOB'S PAYLOAD IS RECEIVED
+  // Extract the ephemeral private key and the public payload to send
+  const aliceEcdhPrivateKey = aliceLocalAuth.keys[0]; // Access key from the returned 'keys' array
+  const alicePayload = aliceLocalAuth.payload;
+
+  // 3. BOB'S PAYLOAD IS RECEIVED
   // (Assuming bobPayload is a valid KeyAuthPayload received from the network)
 
-  // 3. DERIVE SHARED SECRET (1 call: imports, verifies, and derives)
+  // 4. DERIVE SHARED SECRET (1 call: imports, verifies, and derives)
+  // This function uses the LTID public key inside 'bobPayload' to verify the signature.
   const aliceSharedSecret = await deriveSecretFromRemotePayload(
       aliceEcdhPrivateKey,
       bobPayload
   );
   
-  // NOTE: If the signature verification fails, this function throws an error.
+  // NOTE: If the signature verification fails, this function throws an error 
+  // and the handshake is aborted, protecting against MITM attacks.
 
-  // 4. ENCRYPT & DECRYPT
+  // 5. ENCRYPT & DECRYPT
   const plaintext = "This is the simplified secure message.";
   const encryptedPayload = await encryptMessage(aliceSharedSecret, plaintext);
 
@@ -119,11 +122,11 @@ This example demonstrates the full, secure workflow including key signing and ve
 
 ```TypeScript
 
-import { useDiffieHellman } from 'securee2e';
+import { useDiffieHellman, KeyAuthPayload } from 'securee2e';
 
 const {
 generateKeyPair, 
-generateSigningKeys, 
+generateLongTermIdentityKeys, // Added for consistency 
 exportPublicKeyBase64,
 exportSigningPublicKeyBase64,
 importRemotePublicKeyBase64,
@@ -136,38 +139,45 @@ decryptData
 } = useDiffieHellman();
 
 // KeyAuthPayload definition (as an interface for clarity)
+// NOTE: This interface is already included via 'import { KeyAuthPayload } from 'securee2e''
+/*
 interface KeyAuthPayload {
     ecdhPublicKey: string; // Alice's ECDH key
-    ecdsaPublicKey: string; // Alice's ECDSA key
+    ecdsaPublicKey: string; // Alice's ECDSA key (LTID Public Key)
     signature: string; // Signature over the ECDH key
 }
+*/
 
 async function runAuthenticatedExchange(bobPayload: KeyAuthPayload) {
-  // --- 1. ALICE'S KEY GENERATION ---
+  // --- 1. LOAD/GENERATE LTID KEYS & EPHEMERAL ECDH KEYS ---
+  // Alice loads her persistent identity (signing) keys
+  const aliceLtidKeys = await generateLongTermIdentityKeys();
+  
+  // Alice generates her session (encryption) keys
   const aliceEcdhKeys = await generateKeyPair();
-  const aliceEcdsaKeys = await generateSigningKeys();
 
   // --- 2. SIGN PUBLIC KEY & 3. PREPARE PAYLOAD ---
   const ecdhPubKeyBase64 = await exportPublicKeyBase64(aliceEcdhKeys.publicKey);
 
-  // Alice signs her ECDH public key using her ECDSA private key
+  // Alice signs her *ephemeral* ECDH public key using her *LTID* private key
   const signature = await signPublicKey(
-      aliceEcdsaKeys.privateKey, 
+      aliceLtidKeys.ecdsaPrivateKey, // Use LTID Private Key for signing
       aliceEcdhKeys.publicKey
   );
 
   const alicePayload: KeyAuthPayload = {
       ecdhPublicKey: ecdhPubKeyBase64,
-      ecdsaPublicKey: await exportSigningPublicKeyBase64(aliceEcdsaKeys.publicKey),
+      ecdsaPublicKey: await exportSigningPublicKeyBase64(aliceLtidKeys.ecdsaPublicKey), // Use LTID Public Key
       signature: signature
   };
 
   // --- 4. BOB RECEIVES & ALICE VERIFIES BOB'S KEY (SIMULATED) ---
   const bobEcdhKey = await importRemotePublicKeyBase64(bobPayload.ecdhPublicKey);
-  const bobEcdsaKey = await importRemoteSigningPublicKeyBase64(bobPayload.ecdsaPublicKey);
+  // Import the remote party's LTID public key
+  const bobEcdsaKey = await importRemoteSigningPublicKeyBase64(bobPayload.ecdsaPublicKey); 
 
   const isSignatureValid = await verifySignature(
-      bobEcdsaKey, 
+      bobEcdsaKey, // Use Bob's LTID Public Key for verification
       bobEcdhKey,
       bobPayload.signature
   );

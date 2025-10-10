@@ -1,6 +1,20 @@
+import { 
+    currentStorageProvider,
+} from '../storage';
+import type {
+    LTIDKeySet,
+    IKeyStorageProvider
+} from '../storage';
+
 import type { KeyAuthPayload, EncryptedPayload } from '../types/keyExchange';
 
-// --- Utility Functions ---
+// Define the structure for the LTID keys once they are imported into Web Crypto objects
+export interface RuntimeLTIDKeys {
+    ecdsaPrivateKey: CryptoKey;
+    ecdsaPublicKey: CryptoKey;
+}
+
+// --- Utility Functions (Base64 conversion remains unchanged) ---
 
 /**
  * Converts ArrayBuffer to Base64 string.
@@ -24,7 +38,7 @@ const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
     return bytes.buffer;
 };
 
-// --- Low-Level Crypto Functions ---
+// --- Low-Level Crypto Functions (Modified for LTID) ---
 
 /**
  * Generates an ECDH P-256 key pair.
@@ -49,8 +63,37 @@ const generateSigningKeys = async (): Promise<CryptoKeyPair> => {
             name: "ECDSA",
             namedCurve: "P-256",
         },
-        true, // Public key must be extractable for transport; Private key can be non-extractable
+        true, // Keys MUST be extractable (JWK) for LTID storage
         ["sign", "verify"]
+    );
+};
+
+/**
+ * Exports an ECDSA key to JWK format for storage.
+ * @param key - The ECDSA CryptoKey.
+ */
+const exportSigningKeyJwk = async (key: CryptoKey): Promise<JsonWebKey> => {
+    return crypto.subtle.exportKey("jwk", key);
+};
+
+/**
+ * Imports an ECDSA key from JWK format.
+ * @param jwk - The ECDSA key in JWK format.
+ * @param keyUsage - The intended usage for the key ('sign' or 'verify').
+ */
+const importSigningKeyJwk = async (
+    jwk: JsonWebKey,
+    keyUsage: "sign" | "verify"
+): Promise<CryptoKey> => {
+    return crypto.subtle.importKey(
+        "jwk",
+        jwk,
+        {
+            name: "ECDSA",
+            namedCurve: "P-256",
+        },
+        true, // Keys must be extractable for future export/save
+        [keyUsage]
     );
 };
 
@@ -75,6 +118,7 @@ const exportSigningPublicKeyBase64 = async (publicKey: CryptoKey): Promise<strin
 /**
  * Imports a remote ECDH public key from a Base64 string (SPKI format).
  * @param base64Key - The Base64 encoded ECDH public key string.
+
  */
 const importRemotePublicKeyBase64 = async (base64Key: string): Promise<CryptoKey> => {
     const keyBuffer = base64ToArrayBuffer(base64Key);
@@ -85,14 +129,14 @@ const importRemotePublicKeyBase64 = async (base64Key: string): Promise<CryptoKey
             name: "ECDH",
             namedCurve: "P-256",
         },
-        true, // Key must be extractable for the remote party to use it later
+        true,
         []
     );
 };
 
 /**
  * Imports a remote ECDSA public key from a Base64 string (SPKI format).
- * @param base64Key - The Base64 encoded ECDSA public key string.
+ * @param base64Key - The Base64 encoded ECDH public key string.
  */
 const importRemoteSigningPublicKeyBase64 = async (base64Key: string): Promise<CryptoKey> => {
     const keyBuffer = base64ToArrayBuffer(base64Key);
@@ -108,6 +152,7 @@ const importRemoteSigningPublicKeyBase64 = async (base64Key: string): Promise<Cr
     );
 };
 
+
 /**
  * Derives the shared AES-256-GCM secret key using ECDH.
  * @param localPrivateKey - The local ECDH private key.
@@ -121,17 +166,17 @@ const deriveSharedSecret = async (
         {
             name: "ECDH",
             namedCurve: "P-256",
-            public: remotePublicKey, // Requires CryptoKey object
+            public: remotePublicKey,
         },
         localPrivateKey,
-        256 // 256 bits for AES-256
+        256
     );
 
     return crypto.subtle.importKey(
         "raw",
         derivedBits,
         { name: "AES-GCM", length: 256 },
-        true, // Shared key is extractable for storage, though generally not needed
+        true,
         ["encrypt", "decrypt"]
     );
 };
@@ -145,7 +190,6 @@ const signPublicKey = async (
     privateKey: CryptoKey,
     publicKeyToSign: CryptoKey
 ): Promise<string> => {
-    // Export the ECDH public key to sign its raw data
     const keyData = await crypto.subtle.exportKey("spki", publicKeyToSign);
     
     const signatureBuffer = await crypto.subtle.sign(
@@ -185,7 +229,6 @@ const verifySignature = async (
  * @param plaintext - The string to encrypt.
  */
 const encryptData = async (sharedSecret: CryptoKey, plaintext: string): Promise<EncryptedPayload> => {
-    // Generate a new unique 12-byte IV for every message (CRITICAL)
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const encodedText = new TextEncoder().encode(plaintext);
 
@@ -206,6 +249,7 @@ const encryptData = async (sharedSecret: CryptoKey, plaintext: string): Promise<
  * @param sharedSecret - The shared AES-GCM key.
  * @param ivBase64 - The Base64 encoded Initialization Vector.
  * @param ciphertextBase64 - The Base64 encoded ciphertext.
+
  */
 const decryptData = async (
     sharedSecret: CryptoKey,
@@ -225,35 +269,82 @@ const decryptData = async (
 };
 
 
-// --- High-Level API Functions (v0.3.1) ---
 
 /**
- * High-level function to generate ECDH and ECDSA keys, sign the ECDH public key, and package the payload.
- * Returns the payload and the private keys needed for future derivation/signing.
+ * Generates or loads the persistent Long-Term Identity (LTID) ECDSA key pair.
+ * The keys are loaded from or saved to the currently configured storage provider.
+ * @returns The LTID keys in Runtime CryptoKey format.
  */
-const generateLocalAuthPayload = async (): Promise<{ payload: KeyAuthPayload, keys: [CryptoKey, CryptoKey] }> => {
-    // 1. Generate keys
-    const ecdhKeys = await generateKeyPair();
+const generateLongTermIdentityKeys = async (): Promise<RuntimeLTIDKeys> => {
+    // 1. Check Storage for existing keys
+    const storedKeys = await currentStorageProvider.load();
+
+    if (storedKeys) {
+        // 2. Keys found: Import them from JWK to CryptoKey format
+        const ecdsaPrivateKey = await importSigningKeyJwk(storedKeys.ecdsaPrivateKeyJwk, "sign");
+        const ecdsaPublicKey = await importSigningKeyJwk(storedKeys.ecdsaPublicKeyJwk, "verify");
+        
+        console.log('LTID: Loaded keys successfully from storage.');
+        return { ecdsaPrivateKey, ecdsaPublicKey };
+    }
+    
+    // 3. Keys not found: Generate new keys
     const ecdsaKeys = await generateSigningKeys();
 
-    // 2. Export public keys
-    const ecdhPublicKey = await exportPublicKeyBase64(ecdhKeys.publicKey);
-    const ecdsaPublicKey = await exportSigningPublicKeyBase64(ecdsaKeys.publicKey);
+    // 4. Export new keys to JWK for storage
+    const ecdsaPrivateKeyJwk = await exportSigningKeyJwk(ecdsaKeys.privateKey);
+    const ecdsaPublicKeyJwk = await exportSigningKeyJwk(ecdsaKeys.publicKey);
 
-    // 3. Sign the ECDH public key
-    const signature = await signPublicKey(ecdsaKeys.privateKey, ecdhKeys.publicKey);
+    const newKeySet: LTIDKeySet = { ecdsaPrivateKeyJwk, ecdsaPublicKeyJwk };
 
-    // 4. Return payload and private keys
+    // 5. Save the new keys
+    await currentStorageProvider.save(newKeySet);
+
+    console.log('LTID: New keys generated and saved to storage.');
+    return { ecdsaPrivateKey: ecdsaKeys.privateKey, ecdsaPublicKey: ecdsaKeys.publicKey };
+};
+
+/**
+ * HIGH-LEVEL 1: Generates all keys (LTID + Ephemeral) and the authenticated payload.
+ * This function automatically loads or generates the Long-Term Identity (LTID) keys 
+ * and uses them to sign the ephemeral key.
+ * @returns An object containing the KeyAuthPayload and the local private keys.
+ */
+const generateLocalAuthPayload = async () => {
+    // 1. Generate/Load LTID keys (ECDSA) - Handled internally!
+    const ltidKeys = await generateLongTermIdentityKeys();
+
+    // 2. Generate Ephemeral keys (ECDH)
+    const ecdhKeys = await generateKeyPair();
+
+    // 3. Export Public Keys
+    const [ecdhPublicKey, ecdsaPublicKey] = await Promise.all([
+        exportPublicKeyBase64(ecdhKeys.publicKey),
+        exportSigningPublicKeyBase64(ltidKeys.ecdsaPublicKey),
+    ]);
+
+    // 4. Sign the ECDH Public Key using the LTID Private Key
+    const signature = await signPublicKey(ltidKeys.ecdsaPrivateKey, ecdhKeys.publicKey);
+
+    const payload: KeyAuthPayload = {
+        ecdhPublicKey,
+        ecdsaPublicKey,
+        signature,
+    };
+
+    // Return the payload and the necessary private keys for later use
+    // [0] = ECDH Private Key (for derivation)
+    // [1] = ECDSA Private Key (LTID Private Key)
     return {
-        payload: { ecdhPublicKey, ecdsaPublicKey, signature },
-        // [0] ECDH Private Key (for derivation), [1] ECDSA Private Key (for future signing if needed)
-        keys: [ecdhKeys.privateKey, ecdsaKeys.privateKey]
+        payload,
+        keys: [ecdhKeys.privateKey, ltidKeys.ecdsaPrivateKey] as [CryptoKey, CryptoKey]
     };
 };
 
 
+
 /**
- * High-level function to handle a remote payload: import keys, verify signature, and derive shared secret.
+ * High-level function to handle a remote payload: import keys, verify signature, and derive shared secret. (Unchanged logic)
  */
 const deriveSecretFromRemotePayload = async (
     localPrivateKey: CryptoKey, 
@@ -277,7 +368,7 @@ const deriveSecretFromRemotePayload = async (
     // 3. Derive shared secret, passing the correctly imported CryptoKey object
     const sharedSecret = await deriveSharedSecret(
         localPrivateKey,
-        importedRemoteEcdhKey // Correctly passed as a CryptoKey
+        importedRemoteEcdhKey
     );
 
     return sharedSecret;
@@ -302,9 +393,17 @@ const decryptMessage = (sharedSecret: CryptoKey, payload: EncryptedPayload): Pro
 
 export const useDiffieHellman = () => {
     return {
+        // LTID KEY MANAGEMENT
+        generateLongTermIdentityKeys,
+        
+        // High-Level Exports
+        generateLocalAuthPayload,
+        deriveSecretFromRemotePayload,
+        encryptMessage,
+        decryptMessage,
+
         // Low-Level Exports
         generateKeyPair,
-        generateSigningKeys,
         exportPublicKeyBase64,
         exportSigningPublicKeyBase64,
         importRemotePublicKeyBase64,
@@ -314,11 +413,5 @@ export const useDiffieHellman = () => {
         verifySignature,
         encryptData,
         decryptData,
-
-        // High-Level Exports (v0.3.1 API)
-        generateLocalAuthPayload,
-        deriveSecretFromRemotePayload,
-        encryptMessage,
-        decryptMessage,
     };
 };

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.4] - 2025-10-10
+
+### Changed
+* **Simplified High-Level Identity Setup:** The `generateLocalAuthPayload()` function is now truly **zero-argument**. It was refactored to internally call `generateLongTermIdentityKeys()`, automatically handling the loading, generation, and persistence of the Long-Term Identity (LTID) keys before generating and signing the ephemeral payload. This removes the manual dependency on passing LTID keys, further simplifying the authenticated handshake for the end user.
+
 ## [0.3.2] - 2025-10-10
 
 ### 📦 Maintenance & Packaging
