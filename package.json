@@ -1,6 +1,6 @@
 {
   "name": "securee2e",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "author": {
     "name": "Daniele Frisanco",
     "url": "https://www.linkedin.com/in/daniele-frisanco-9589835a/"
@@ -69,5 +69,5 @@
     "diffie-hellman",
     "aes-gcm",
     "ecdsa"
-  ],
+  ]
 }

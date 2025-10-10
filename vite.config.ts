@@ -1,6 +1,6 @@
-import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
-import { resolve } from 'path'
+import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
+import { resolve } from 'path';
 
 export default defineConfig({
   plugins: [vue()],
@@ -16,18 +16,26 @@ export default defineConfig({
   },
   build: {
     lib: {
-      // Changed entry to .ts file
+      // Keeping the user's entry point, assuming src/index.ts correctly re-exports everything
       entry: resolve(__dirname, 'src/index.ts'), 
       name: 'securee2e',
-      fileName: 'securee2e'
+      // CRITICAL: Removed the generic fileName property to allow RollupOptions to control naming
     },
     rollupOptions: {
       external: ['vue'],
-      output: {
-        globals: {
-          vue: 'Vue'
+      // CRITICAL FIX: Explicitly define the output formats and file names
+      output: [
+        {
+          format: 'es', // ES Module (for 'module' field in package.json)
+          entryFileNames: 'securee2e.mjs',
+          globals: { vue: 'Vue' }
+        },
+        {
+          format: 'cjs', // CommonJS (for 'main' field in package.json)
+          entryFileNames: 'securee2e.js',
+          globals: { vue: 'Vue' }
         }
-      }
+      ]
     }
   }
-})
+});
