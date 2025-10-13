@@ -1,9 +1,29 @@
-const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), s = (t) => {
-  const e = atob(t), r = e.length, n = new Uint8Array(r);
-  for (let a = 0; a < r; a++)
-    n[a] = e.charCodeAt(a);
-  return n.buffer;
-}, o = async () => crypto.subtle.generateKey(
+class h {
+  storageKey = "securee2e-ltid-v0-4-0";
+  async load() {
+    const e = localStorage.getItem(this.storageKey);
+    if (e)
+      try {
+        return JSON.parse(e);
+      } catch (r) {
+        return console.error("Failed to parse stored LTID key set from localStorage:", r), localStorage.removeItem(this.storageKey), null;
+      }
+    return null;
+  }
+  async save(e) {
+    localStorage.setItem(this.storageKey, JSON.stringify(e));
+  }
+  async clear() {
+    localStorage.removeItem(this.storageKey);
+  }
+}
+let i = new h();
+const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), o = (t) => {
+  const e = atob(t), r = e.length, a = new Uint8Array(r);
+  for (let s = 0; s < r; s++)
+    a[s] = e.charCodeAt(s);
+  return a.buffer;
+}, l = async () => crypto.subtle.generateKey(
   {
     name: "ECDH",
     namedCurve: "P-256"
@@ -11,22 +31,32 @@ const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), s = (t) => {
   !1,
   // Private key is non-extractable (security best practice)
   ["deriveKey", "deriveBits"]
-), y = async () => crypto.subtle.generateKey(
+), k = async () => crypto.subtle.generateKey(
   {
     name: "ECDSA",
     namedCurve: "P-256"
   },
   !0,
-  // Public key must be extractable for transport; Private key can be non-extractable
+  // Keys MUST be extractable (JWK) for LTID storage
   ["sign", "verify"]
-), u = async (t) => {
+), y = async (t) => crypto.subtle.exportKey("jwk", t), u = async (t, e) => crypto.subtle.importKey(
+  "jwk",
+  t,
+  {
+    name: "ECDSA",
+    namedCurve: "P-256"
+  },
+  !0,
+  // Keys must be extractable for future export/save
+  [e]
+), d = async (t) => {
   const e = await crypto.subtle.exportKey("spki", t);
   return c(e);
 }, p = async (t) => {
   const e = await crypto.subtle.exportKey("spki", t);
   return c(e);
-}, d = async (t) => {
-  const e = s(t);
+}, K = async (t) => {
+  const e = o(t);
   return crypto.subtle.importKey(
     "spki",
     e,
@@ -35,11 +65,10 @@ const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), s = (t) => {
       namedCurve: "P-256"
     },
     !0,
-    // Key must be extractable for the remote party to use it later
     []
   );
-}, l = async (t) => {
-  const e = s(t);
+}, g = async (t) => {
+  const e = o(t);
   return crypto.subtle.importKey(
     "spki",
     e,
@@ -50,97 +79,108 @@ const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), s = (t) => {
     !0,
     ["verify"]
   );
-}, b = async (t, e) => {
+}, m = async (t, e) => {
   const r = await crypto.subtle.deriveBits(
     {
       name: "ECDH",
       namedCurve: "P-256",
       public: e
-      // Requires CryptoKey object
     },
     t,
     256
-    // 256 bits for AES-256
   );
   return crypto.subtle.importKey(
     "raw",
     r,
     { name: "AES-GCM", length: 256 },
     !0,
-    // Shared key is extractable for storage, though generally not needed
     ["encrypt", "decrypt"]
   );
-}, m = async (t, e) => {
-  const r = await crypto.subtle.exportKey("spki", e), n = await crypto.subtle.sign(
+}, b = async (t, e) => {
+  const r = await crypto.subtle.exportKey("spki", e), a = await crypto.subtle.sign(
     { name: "ECDSA", hash: { name: "SHA-256" } },
     t,
     r
   );
-  return c(n);
-}, K = async (t, e, r) => {
-  const n = await crypto.subtle.exportKey("spki", e), a = s(r);
+  return c(a);
+}, w = async (t, e, r) => {
+  const a = await crypto.subtle.exportKey("spki", e), s = o(r);
   return crypto.subtle.verify(
     { name: "ECDSA", hash: { name: "SHA-256" } },
     t,
-    a,
-    n
+    s,
+    a
   );
-}, f = async (t, e) => {
-  const r = crypto.getRandomValues(new Uint8Array(12)), n = new TextEncoder().encode(e), a = await crypto.subtle.encrypt(
+}, v = async (t, e) => {
+  const r = crypto.getRandomValues(new Uint8Array(12)), a = new TextEncoder().encode(e), s = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv: r },
-    t,
-    n
-  );
-  return {
-    iv: c(r.buffer),
-    ciphertext: c(a)
-  };
-}, g = async (t, e, r) => {
-  const n = s(e), a = s(r), i = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: n },
     t,
     a
   );
-  return new TextDecoder().decode(i);
-}, w = async () => {
-  const t = await o(), e = await y(), r = await u(t.publicKey), n = await p(e.publicKey), a = await m(e.privateKey, t.publicKey);
   return {
-    payload: { ecdhPublicKey: r, ecdsaPublicKey: n, signature: a },
-    // [0] ECDH Private Key (for derivation), [1] ECDSA Private Key (for future signing if needed)
-    keys: [t.privateKey, e.privateKey]
+    iv: c(r.buffer),
+    ciphertext: c(s)
   };
-}, v = async (t, e) => {
-  const r = await d(e.ecdhPublicKey), n = await l(e.ecdsaPublicKey);
-  if (!await K(
-    n,
+}, f = async (t, e, r) => {
+  const a = o(e), s = o(r), n = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: a },
+    t,
+    s
+  );
+  return new TextDecoder().decode(n);
+}, S = async () => {
+  const t = await i.load();
+  if (t) {
+    const n = await u(t.ecdsaPrivateKeyJwk, "sign"), P = await u(t.ecdsaPublicKeyJwk, "verify");
+    return console.log("LTID: Loaded keys successfully from storage."), { ecdsaPrivateKey: n, ecdsaPublicKey: P };
+  }
+  const e = await k(), r = await y(e.privateKey), a = await y(e.publicKey), s = { ecdsaPrivateKeyJwk: r, ecdsaPublicKeyJwk: a };
+  return await i.save(s), console.log("LTID: New keys generated and saved to storage."), { ecdsaPrivateKey: e.privateKey, ecdsaPublicKey: e.publicKey };
+}, C = async () => {
+  const t = await S(), e = await l(), [r, a] = await Promise.all([
+    d(e.publicKey),
+    p(t.ecdsaPublicKey)
+  ]), s = await b(t.ecdsaPrivateKey, e.publicKey);
+  return {
+    payload: {
+      ecdhPublicKey: r,
+      ecdsaPublicKey: a,
+      signature: s
+    },
+    keys: [e.privateKey, t.ecdsaPrivateKey]
+  };
+}, x = async (t, e) => {
+  const r = await K(e.ecdhPublicKey), a = await g(e.ecdsaPublicKey);
+  if (!await w(
+    a,
     r,
     e.signature
   ))
     throw new Error("Remote key signature is invalid.");
-  return await b(
+  return await m(
     t,
     r
-    // Correctly passed as a CryptoKey
   );
-}, S = (t, e) => f(t, e), h = (t, e) => g(t, e.iv, e.ciphertext), C = () => ({
+}, D = (t, e) => v(t, e), A = (t, e) => f(t, e.iv, e.ciphertext), B = () => ({
+  // LTID KEY MANAGEMENT
+  generateLongTermIdentityKeys: S,
+  // High-Level Exports
+  generateLocalAuthPayload: C,
+  deriveSecretFromRemotePayload: x,
+  encryptMessage: D,
+  decryptMessage: A,
   // Low-Level Exports
-  generateKeyPair: o,
-  generateSigningKeys: y,
-  exportPublicKeyBase64: u,
+  generateKeyPair: l,
+  exportPublicKeyBase64: d,
   exportSigningPublicKeyBase64: p,
-  importRemotePublicKeyBase64: d,
-  importRemoteSigningPublicKeyBase64: l,
-  deriveSharedSecret: b,
-  signPublicKey: m,
-  verifySignature: K,
-  encryptData: f,
-  decryptData: g,
-  // High-Level Exports (v0.3.1 API)
-  generateLocalAuthPayload: w,
-  deriveSecretFromRemotePayload: v,
-  encryptMessage: S,
-  decryptMessage: h
+  importRemotePublicKeyBase64: K,
+  importRemoteSigningPublicKeyBase64: g,
+  deriveSharedSecret: m,
+  signPublicKey: b,
+  verifySignature: w,
+  encryptData: v,
+  decryptData: f
 });
 export {
-  C as useDiffieHellman
+  B as useDiffieHellman
 };
