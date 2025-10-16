@@ -1,4 +1,16 @@
 # Changelog
+## [0.4.2] (Persistent Storage Migration)
+* **Feature:** Implemented the persistent, asynchronous `IndexedDBProvider` to store Long-Term Identity (LTID) key sets securely.
+
+* **Update:** Set `IndexedDBProvider` as the **default storage mechanism**, ensuring LTID keys persist across browser sessions and full page refreshes.
+
+* **Refactor:** Decoupled storage logic from the main hook by introducing the `IKeyStorageProvider` interface and creating modular files, stabilizing key retrieval logic for all storage types.
+
+## [0.4.1] (Dependency Update)
+* **Update:** Defined **Vue.js** as a `peerDependency` in the library's package configuration, aligning with best practices for Vue composables.
+
+* **Refactor:** Centralized key generation and persistence logic within `useDiffieHellman.ts` for clearer control flow and better preparation for async operations.
+
 ## [0.4.0] - 2025-10-10
 ### Added
 * **Key Persistence (Default):** The Long-Term Identity (LTID) keys are now persistent by default, surviving page refreshes and browser restarts.

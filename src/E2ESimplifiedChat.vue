@@ -2,7 +2,14 @@
 import { ref, computed } from 'vue';
 import { useDiffieHellman } from './composables/useDiffieHellman';
 import { EncryptedPayload, KeyAuthPayload } from './types/keyExchange'; 
-import { setCurrentStorageProvider, InMemoryStorageProvider, IKeyStorageProvider, LocalStorageProvider } from './storage';
+// FIX: Import the IndexedDBProvider for testing its persistence
+import { 
+    setCurrentStorageProvider, 
+    InMemoryStorageProvider, 
+    IKeyStorageProvider, 
+    LocalStorageProvider,
+    IndexedDBProvider // <-- NOW IMPORTED
+} from './storage';
 
 // --- State Management ---
 const dh = useDiffieHellman();
@@ -23,8 +30,11 @@ const localAuthResult = ref<{ payload: KeyAuthPayload; keys: [CryptoKey, CryptoK
 const remoteKeyExchangePayload = ref<KeyAuthPayload | null>(null);
 
 // --- Storage State (NEW for v0.4.0) ---
-const currentProviderName = ref('LocalStorageProvider');
-const storageMessage = ref('Keys persist across refreshes (LocalStorage default).');
+// Note: We cannot rely on currentProviderName reflecting the initial state 
+// unless we read the default from the storage module. We'll assume LocalStorage 
+// or IndexedDB is the ultimate goal.
+const currentProviderName = ref('Check `storage.ts` default');
+const storageMessage = ref('Keys persist across refreshes (Click an option below).');
 
 // --- Storage Provider Logic ---
 
@@ -33,6 +43,7 @@ const swapToProvider = (provider: IKeyStorageProvider, name: string, message: st
     if (connectionStatus.value !== 'disconnected' || localAuthResult.value) {
         reset(); 
     }
+    // This is the core function that injects the chosen provider
     setCurrentStorageProvider(provider);
     currentProviderName.value = name;
     storageMessage.value = message;
@@ -245,6 +256,13 @@ const reset = () => {
                     class="btn-tiny-yellow"
                 >
                     Use Persistent (LocalStorage)
+                </button>
+                 <button 
+                    @click="swapToProvider(new IndexedDBProvider(), 'IndexedDBProvider', 'Keys persist robustly across refreshes (Recommended).')"
+                    :disabled="currentProviderName === 'IndexedDBProvider'"
+                    class="btn-tiny-yellow"
+                >
+                    Use Persistent (IndexedDB)
                 </button>
                 <button 
                     @click="swapToProvider(new InMemoryStorageProvider(), 'InMemoryStorageProvider', 'Keys will be lost on page refresh!')"

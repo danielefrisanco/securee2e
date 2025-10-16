@@ -1,29 +1,123 @@
-class h {
-  storageKey = "securee2e-ltid-v0-4-0";
+class k {
+  // This is a private, in-memory variable that holds the keys for the current session.
+  store = null;
+  storageKey = "securee2e-ltid-inmemory-mock";
+  // Placeholder key
   async load() {
-    const e = localStorage.getItem(this.storageKey);
-    if (e)
-      try {
-        return JSON.parse(e);
-      } catch (r) {
-        return console.error("Failed to parse stored LTID key set from localStorage:", r), localStorage.removeItem(this.storageKey), null;
-      }
-    return null;
+    return this.store ? JSON.parse(JSON.stringify(this.store)) : null;
   }
   async save(e) {
-    localStorage.setItem(this.storageKey, JSON.stringify(e));
+    this.store = e;
   }
   async clear() {
-    localStorage.removeItem(this.storageKey);
+    this.store = null;
   }
 }
-let i = new h();
-const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), o = (t) => {
-  const e = atob(t), r = e.length, a = new Uint8Array(r);
-  for (let s = 0; s < r; s++)
-    a[s] = e.charCodeAt(s);
-  return a.buffer;
-}, l = async () => crypto.subtle.generateKey(
+const C = "securee2e-db", I = 1, a = "ltid_keys", p = "user_ltid_keys";
+class A {
+  /**
+   * Opens a connection to the IndexedDB database.
+   * If the database or object store does not exist, it creates them.
+   * @returns A Promise that resolves to an IDBDatabase instance.
+   */
+  openDatabase() {
+    return new Promise((e, r) => {
+      if (typeof window > "u" || !window.indexedDB)
+        return console.error("IndexedDB is not supported or available."), r(new Error("IndexedDB not supported."));
+      const s = indexedDB.open(C, I);
+      s.onupgradeneeded = (n) => {
+        const o = n.target.result;
+        o.objectStoreNames.contains(a) || (o.createObjectStore(a), console.debug(`IndexedDB: Created object store ${a}`));
+      }, s.onsuccess = (n) => {
+        e(n.target.result);
+      }, s.onerror = (n) => {
+        console.error("IndexedDB Error:", n.target.error), r(n.target.error);
+      };
+    });
+  }
+  /**
+   * Helper to check if IndexedDB is available (useful for the fallback logic).
+   */
+  isAvailable() {
+    return typeof window < "u" && !!window.indexedDB;
+  }
+  /**
+   * Reads the LTID keys from the IndexedDB.
+   * @returns A Promise that resolves to the LTIDKeySet or null if not found.
+   */
+  async load() {
+    if (!this.isAvailable()) return null;
+    try {
+      const e = await this.openDatabase();
+      return new Promise((r) => {
+        const o = e.transaction([a], "readonly").objectStore(a).get(p);
+        o.onsuccess = () => {
+          e.close();
+          const c = o.result;
+          r(c || null);
+        }, o.onerror = () => {
+          e.close(), console.warn("IndexedDB Load Warning: Failed to retrieve key, treating as null."), r(null);
+        };
+      });
+    } catch (e) {
+      return console.error("IndexedDB Load Critical Error:", e), null;
+    }
+  }
+  /**
+   * Writes the LTID keys to the IndexedDB.
+   * @param keyset The LTIDKeySet object to save.
+   * @returns A Promise that resolves when the save is complete.
+   */
+  async save(e) {
+    if (this.isAvailable())
+      try {
+        const r = await this.openDatabase();
+        return new Promise((s, n) => {
+          const y = r.transaction([a], "readwrite").objectStore(a).put(e, p);
+          y.onsuccess = () => {
+            r.close(), console.debug("IndexedDB: LTID keys saved successfully."), s();
+          }, y.onerror = (u) => {
+            r.close();
+            const w = u.target.error;
+            console.error("IndexedDB Save Error:", w), n(w);
+          };
+        });
+      } catch (r) {
+        throw console.error("IndexedDB Save Critical Error:", r), r;
+      }
+  }
+  /**
+   * Clears the LTID keys from the IndexedDB store.
+   * @returns A Promise that resolves when the clear operation is complete.
+   */
+  async clear() {
+    if (this.isAvailable())
+      try {
+        const e = await this.openDatabase();
+        return new Promise((r, s) => {
+          const c = e.transaction([a], "readwrite").objectStore(a).delete(p);
+          c.onsuccess = () => {
+            e.close(), console.debug("IndexedDB: LTID keys cleared successfully."), r();
+          }, c.onerror = (y) => {
+            e.close();
+            const u = y.target.error;
+            console.error("IndexedDB Clear Error:", u), s(u);
+          };
+        });
+      } catch (e) {
+        throw console.error("IndexedDB Clear Critical Error:", e), e;
+      }
+  }
+}
+function T() {
+  return typeof window < "u" && window.indexedDB ? (console.log("STORAGE: Using IndexedDBProvider for persistent storage."), new A()) : (console.warn("STORAGE: IndexedDB not available. Falling back to InMemoryStorageProvider."), new k());
+}
+const b = T(), i = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), d = (t) => {
+  const e = atob(t), r = e.length, s = new Uint8Array(r);
+  for (let n = 0; n < r; n++)
+    s[n] = e.charCodeAt(n);
+  return s.buffer;
+}, K = async () => crypto.subtle.generateKey(
   {
     name: "ECDH",
     namedCurve: "P-256"
@@ -31,7 +125,7 @@ const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), o = (t) => {
   !1,
   // Private key is non-extractable (security best practice)
   ["deriveKey", "deriveBits"]
-), k = async () => crypto.subtle.generateKey(
+), R = async () => crypto.subtle.generateKey(
   {
     name: "ECDSA",
     namedCurve: "P-256"
@@ -39,7 +133,7 @@ const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), o = (t) => {
   !0,
   // Keys MUST be extractable (JWK) for LTID storage
   ["sign", "verify"]
-), y = async (t) => crypto.subtle.exportKey("jwk", t), u = async (t, e) => crypto.subtle.importKey(
+), g = async (t) => crypto.subtle.exportKey("jwk", t), f = async (t, e) => crypto.subtle.importKey(
   "jwk",
   t,
   {
@@ -49,14 +143,14 @@ const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), o = (t) => {
   !0,
   // Keys must be extractable for future export/save
   [e]
-), d = async (t) => {
+), m = async (t) => {
   const e = await crypto.subtle.exportKey("spki", t);
-  return c(e);
-}, p = async (t) => {
+  return i(e);
+}, v = async (t) => {
   const e = await crypto.subtle.exportKey("spki", t);
-  return c(e);
-}, K = async (t) => {
-  const e = o(t);
+  return i(e);
+}, D = async (t) => {
+  const e = d(t);
   return crypto.subtle.importKey(
     "spki",
     e,
@@ -67,8 +161,8 @@ const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), o = (t) => {
     !0,
     []
   );
-}, g = async (t) => {
-  const e = o(t);
+}, S = async (t) => {
+  const e = d(t);
   return crypto.subtle.importKey(
     "spki",
     e,
@@ -79,7 +173,7 @@ const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), o = (t) => {
     !0,
     ["verify"]
   );
-}, m = async (t, e) => {
+}, P = async (t, e) => {
   const r = await crypto.subtle.deriveBits(
     {
       name: "ECDH",
@@ -96,91 +190,96 @@ const c = (t) => btoa(String.fromCharCode(...new Uint8Array(t))), o = (t) => {
     !0,
     ["encrypt", "decrypt"]
   );
-}, b = async (t, e) => {
-  const r = await crypto.subtle.exportKey("spki", e), a = await crypto.subtle.sign(
+}, h = async (t, e) => {
+  const r = await crypto.subtle.exportKey("spki", e), s = await crypto.subtle.sign(
     { name: "ECDSA", hash: { name: "SHA-256" } },
     t,
     r
   );
-  return c(a);
-}, w = async (t, e, r) => {
-  const a = await crypto.subtle.exportKey("spki", e), s = o(r);
+  return i(s);
+}, x = async (t, e, r) => {
+  const s = await crypto.subtle.exportKey("spki", e), n = d(r);
   return crypto.subtle.verify(
     { name: "ECDSA", hash: { name: "SHA-256" } },
     t,
-    s,
-    a
+    n,
+    s
   );
-}, v = async (t, e) => {
-  const r = crypto.getRandomValues(new Uint8Array(12)), a = new TextEncoder().encode(e), s = await crypto.subtle.encrypt(
+}, B = async (t, e) => {
+  const r = crypto.getRandomValues(new Uint8Array(12)), s = new TextEncoder().encode(e), n = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv: r },
-    t,
-    a
-  );
-  return {
-    iv: c(r.buffer),
-    ciphertext: c(s)
-  };
-}, f = async (t, e, r) => {
-  const a = o(e), s = o(r), n = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: a },
     t,
     s
   );
-  return new TextDecoder().decode(n);
-}, S = async () => {
-  const t = await i.load();
+  return {
+    iv: i(r.buffer),
+    ciphertext: i(n)
+  };
+}, E = async (t, e, r) => {
+  const s = d(e), n = d(r), o = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: s },
+    t,
+    n
+  );
+  return new TextDecoder().decode(o);
+}, L = async () => {
+  const t = await b.load();
   if (t) {
-    const n = await u(t.ecdsaPrivateKeyJwk, "sign"), P = await u(t.ecdsaPublicKeyJwk, "verify");
-    return console.log("LTID: Loaded keys successfully from storage."), { ecdsaPrivateKey: n, ecdsaPublicKey: P };
+    const o = await f(t.ecdsaPrivateKeyJwk, "sign"), c = await f(t.ecdsaPublicKeyJwk, "verify");
+    return console.log("LTID: Loaded keys successfully from storage."), { ecdsaPrivateKey: o, ecdsaPublicKey: c };
   }
-  const e = await k(), r = await y(e.privateKey), a = await y(e.publicKey), s = { ecdsaPrivateKeyJwk: r, ecdsaPublicKeyJwk: a };
-  return await i.save(s), console.log("LTID: New keys generated and saved to storage."), { ecdsaPrivateKey: e.privateKey, ecdsaPublicKey: e.publicKey };
-}, C = async () => {
-  const t = await S(), e = await l(), [r, a] = await Promise.all([
-    d(e.publicKey),
-    p(t.ecdsaPublicKey)
-  ]), s = await b(t.ecdsaPrivateKey, e.publicKey);
+  const e = await R(), r = await g(e.privateKey), s = await g(e.publicKey), n = { ecdsaPrivateKeyJwk: r, ecdsaPublicKeyJwk: s };
+  return await b.save(n), console.log("LTID: New keys generated and saved to storage."), { ecdsaPrivateKey: e.privateKey, ecdsaPublicKey: e.publicKey };
+};
+let l;
+const M = async () => {
+  if (!l)
+    throw new Error("LTID keys were not initialized. Await useDiffieHellman() first.");
+  const t = l, e = await K(), [r, s] = await Promise.all([
+    m(e.publicKey),
+    v(t.ecdsaPublicKey)
+  ]), n = await h(t.ecdsaPrivateKey, e.publicKey);
   return {
     payload: {
       ecdhPublicKey: r,
-      ecdsaPublicKey: a,
-      signature: s
+      ecdsaPublicKey: s,
+      signature: n
     },
     keys: [e.privateKey, t.ecdsaPrivateKey]
   };
-}, x = async (t, e) => {
-  const r = await K(e.ecdhPublicKey), a = await g(e.ecdsaPublicKey);
-  if (!await w(
-    a,
+}, J = async (t, e) => {
+  const r = await D(e.ecdhPublicKey), s = await S(e.ecdsaPublicKey);
+  if (!await x(
+    s,
     r,
     e.signature
   ))
     throw new Error("Remote key signature is invalid.");
-  return await m(
+  return await P(
     t,
     r
   );
-}, D = (t, e) => v(t, e), A = (t, e) => f(t, e.iv, e.ciphertext), B = () => ({
+}, O = (t, e) => B(t, e), _ = (t, e) => E(t, e.iv, e.ciphertext), j = async () => (l = await L(), {
   // LTID KEY MANAGEMENT
-  generateLongTermIdentityKeys: S,
+  // The explicit method is still exported for completeness, though it runs on initialization.
+  generateLongTermIdentityKeys: () => Promise.resolve(l),
   // High-Level Exports
-  generateLocalAuthPayload: C,
-  deriveSecretFromRemotePayload: x,
-  encryptMessage: D,
-  decryptMessage: A,
+  generateLocalAuthPayload: M,
+  deriveSecretFromRemotePayload: J,
+  encryptMessage: O,
+  decryptMessage: _,
   // Low-Level Exports
-  generateKeyPair: l,
-  exportPublicKeyBase64: d,
-  exportSigningPublicKeyBase64: p,
-  importRemotePublicKeyBase64: K,
-  importRemoteSigningPublicKeyBase64: g,
-  deriveSharedSecret: m,
-  signPublicKey: b,
-  verifySignature: w,
-  encryptData: v,
-  decryptData: f
+  generateKeyPair: K,
+  exportPublicKeyBase64: m,
+  exportSigningPublicKeyBase64: v,
+  importRemotePublicKeyBase64: D,
+  importRemoteSigningPublicKeyBase64: S,
+  deriveSharedSecret: P,
+  signPublicKey: h,
+  verifySignature: x,
+  encryptData: B,
+  decryptData: E
 });
 export {
-  B as useDiffieHellman
+  j as useDiffieHellman
 };

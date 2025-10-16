@@ -93,3 +93,5 @@ export function setCurrentStorageProvider(provider: IKeyStorageProvider): void {
     }
     currentStorageProvider = provider;
 }
+
+export { IndexedDBProvider } from './storage/IndexedDBProvider'; 

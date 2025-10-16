@@ -22,7 +22,7 @@ jobs:
       - name: Set up Node.js for Build and Test
         uses: actions/setup-node@v4
         with:
-          node-version: '20' # Using LTS for stability
+          node-version: '20'
           cache: 'npm'
 
       - name: Install Dependencies
@@ -32,16 +32,16 @@ jobs:
         run: npm run test
 
       - name: Build Library
-        # This uses your defined "build" script in package.json
         run: npm run build
 
-      - name: Configure NPM Registry for Publishing
+      # --- CONSOLIDATED PUBLISHING STEP ---
+      - name: Configure NPM & Publish
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-          # NOTE: The 'npm token' required for publishing is handled implicitly by OIDC here.
+          registry-url: 'https://registry.npmjs.org' # Sets the registry URL
+          # By including the permissions: id-token: write and
+          # the registry-url, setup-node implicitly handles the OIDC token exchange.
 
       - name: Run NPM Publish
-        # This is the separate step that executes the shell command after configuration
         run: npm publish --access public

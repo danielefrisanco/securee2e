@@ -9,7 +9,8 @@ export default defineConfig({
     environment: 'jsdom', // CRITICAL: Enables browser environment for 'window'
     // CRITICAL: Tells Vitest where to find the setup file
     setupFiles: [
-      './vitest.setup.js'
+      './vitest.setup.js',
+      'fake-indexeddb/auto'
     ],
     // Glob patterns for finding test files
     include: ['__tests__/**/*.{ts,js}'],

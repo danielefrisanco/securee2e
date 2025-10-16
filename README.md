@@ -68,6 +68,7 @@ async function runSimplifiedExchange(bobPayload: KeyAuthPayload) {
 
   // 1. ALICE'S AUTHENTICATED KEY GENERATION (1 call)
   // The LTID key is automatically loaded/generated and used to sign the payload.
+  // The LTID key is automatically loaded/generated using the IndexedDBProvider`
   const aliceLocalAuth = await generateLocalAuthPayload(); 
 
   // Extract the ephemeral private key and the public payload to send
@@ -98,27 +99,26 @@ async function runSimplifiedExchange(bobPayload: KeyAuthPayload) {
   console.log("Decrypted Message:", decryptedMessage); 
 }
 ```
-### 💾 Persistence and Key Management (v0.4.0)
+### 💾 Persistence and Key Management
+Your Long-Term Identity (LTID) keys are now **persistently stored using IndexedDB** by default, meaning they survive page refreshes and browser restarts.
 
-With version `0.4.0`, your Long-Term Identity (LTID) keys are now **persistent** by default, meaning they survive page refreshes and browser restarts.
-
-The library achieves this using the **Provider Pattern** based on the `IKeyStorageProvider` interface.
+The library achieves this using the **Provider Pattern** based on the `IKeyStorageProvider` interface, allowing you to swap out storage mechanisms easily.
 
 | Default Provider | Persistence | Notes | 
  | ----- | ----- | ----- | 
-| **LocalStorageProvider** (NEW DEFAULT) | **Persistent** | Saves LTID keys to `window.localStorage`. Safe and effective for client-side persistence. | 
-| **InMemoryStorageProvider** (Fallback) | Transient | Keys are lost when the page is closed/refreshed. | 
+| **IndexedDBProvider** (NEW DEFAULT) | **Persistent** | Uses the asynchronous IndexedDB API for highly secure, robust persistence of LTID keys. | 
+| **LocalStorageProvider** (Option) | Persistent | Saves LTID keys to `window.localStorage`. Available as an alternative. | 
+| **InMemoryStorageProvider** (Option) | Transient | Keys are lost when the page is closed/refreshed. |
 
 #### Swapping Storage Providers
-
-While the default is `LocalStorageProvider`, you can inject any custom storage solution that implements `IKeyStorageProvider` (e.g., to use IndexedDB, or a remote server).
+While the default is the `IndexedDBProvider`, you can inject any custom storage solution that implements `IKeyStorageProvider`.
 
 To switch providers, import `setCurrentStorageProvider` and your chosen provider class *before* calling `useDiffieHellman()`.
 
 ```typescript
 import { setCurrentStorageProvider, InMemoryStorageProvider, IKeyStorageProvider } from 'securee2e';
 
-// Example: Switch back to non-persistent, in-memory storage
+// Example: Switch to non-persistent, in-memory storage
 setCurrentStorageProvider(new InMemoryStorageProvider());
 
 // Example: If you wrote a custom provider
@@ -129,7 +129,6 @@ setCurrentStorageProvider(new InMemoryStorageProvider());
 const { generateLocalAuthPayload } = useDiffieHellman();
 
 ```
-
 📖 Low-Level Usage: The Authenticated E2E Workflow (6 Steps)
 -------------------------------------------------------
 
@@ -182,7 +181,7 @@ interface KeyAuthPayload {
 async function runAuthenticatedExchange(bobPayload: KeyAuthPayload) {
   // --- 1. LOAD/GENERATE LTID KEYS & EPHEMERAL ECDH KEYS ---
   // Alice loads her persistent identity (signing) keys
-  const aliceLtidKeys = await generateLongTermIdentityKeys();
+  const aliceLtidKeys = await generateLongTermIdentityKeys(); // Now uses IndexedDBProvider internally
   
   // Alice generates her session (encryption) keys
   const aliceEcdhKeys = await generateKeyPair();
