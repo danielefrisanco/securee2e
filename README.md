@@ -147,6 +147,14 @@ Decoding accepts URL-safe Base64 and missing padding.
 4. **The identity is only as safe as the origin.** A non-extractable key cannot be exfiltrated, but malicious code on your origin could still *use* it. Standard XSS hygiene applies.
 5. **`resetIdentity()` is a new identity.** Peers who pinned you will (correctly) reject the new key until they re-verify.
 
+## Roadmap / possible future developments
+
+Not implemented yet; open an issue if you need one of these.
+
+- **Built-in TOFU trust store** — a small `ITrustStore` (peer id → fingerprint, persisted in IndexedDB) so trust-on-first-use is one call instead of the hand-rolled pattern shown above, with an explicit "identity changed" event.
+- **Per-message ratchet** — Double-Ratchet-style key evolution for forward secrecy *within* a session, not only between handshakes.
+- **Multi-device identities** — one user, several identity keys, with cross-signing so peers pin a user rather than a device.
+
 ## Upgrading from 0.4.x
 
 - `useDiffieHellman()` is gone. Use `createSecureE2E()` (any framework) or `useSecureE2E()` from `securee2e/vue`.

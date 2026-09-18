@@ -37,6 +37,9 @@ A ground-up rework after a review found the 0.4.x package unusable as documented
 * Scaffold files and broken demos removed; new two-peer `playground/` (`npm run dev`).
 * `dist/` no longer tracked in git; `prepublishOnly` runs typecheck, tests and build.
 
+### Not included (see README "Roadmap")
+* Built-in TOFU trust store, per-message ratchet, multi-device identities.
+
 ## [0.4.2] (Persistent Storage Migration)
 * **Feature:** Implemented the persistent, asynchronous `IndexedDBProvider` to store Long-Term Identity (LTID) key sets securely.
 
