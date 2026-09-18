@@ -1,4 +1,42 @@
 # Changelog
+
+## [0.5.0] - 2026-09-18 — Breaking
+
+A ground-up rework after a review found the 0.4.x package unusable as documented and its MITM claim unfounded. Wire format is **not** compatible with 0.4.x.
+
+### Security
+* **Identity pinning.** `deriveSecretFromRemotePayload` / `verifyRemotePayload` accept `expectedIdentityKey` or `expectedFingerprint` and throw `IdentityMismatchError`. Previously a self-signed attacker payload was accepted — the signature only ever proved consistency with the key *inside the same payload*.
+* **Non-extractable identity keys.** The ECDSA private key is generated non-extractable and persisted as a `CryptoKey` in IndexedDB instead of a plaintext JWK. 0.4.0 localStorage identities are migrated automatically (and become non-extractable).
+* **HKDF.** Raw ECDH output is no longer used as the AES key; it goes through HKDF-SHA256 with `info` bound to the protocol version and both ephemeral public keys.
+* **Domain-separated signatures** over `"securee2e/v1/ecdh-public-key" ‖ SPKI`, so a signature cannot be reused in another context.
+* Session AES key is non-extractable. The identity private key is no longer returned to callers.
+* Optional **AAD** on `encryptMessage` / `decryptMessage` for replay/reorder protection.
+
+### Fixed
+* Package exported only `useDiffieHellman`; storage providers, `setCurrentStorageProvider` and all types were unreachable. `setCurrentStorageProvider` additionally lived in a dead file (`src/storage.ts`) that shadowed `src/storage/index.ts`, so swapping providers never worked.
+* No type declarations were emitted (`vue-tsc` with no project); `types` pointed to a missing file.
+* `require('securee2e')` returned `{}`: the CJS bundle had a `.js` extension under `"type": "module"`. Now `.cjs`; `exports.types` ordered first.
+* `String.fromCharCode(...bytes)` overflowed the stack for payloads above ~100 KB. Base64 is now chunked and accepts URL-safe input.
+* Two concurrent first calls could both generate an identity, with only one persisted. Initialisation is memoised.
+* Storage provider was selected (with console output) at import time; now lazy, so importing has no side effects and SSR is quiet.
+* README examples called the async `useDiffieHellman()` synchronously.
+
+### Changed
+* **New API.** `createSecureE2E(options)` (framework-agnostic) and `useSecureE2E(options)` in `securee2e/vue` (reactive `isReady`, `isInitializing`, `error`, `identityPublicKey`, `identityFingerprint`). `useDiffieHellman` removed.
+* `generateLocalAuthPayload()` returns `{ payload, ecdhPrivateKey }`; `deriveSecretFromRemotePayload(local, remote, options?)` takes that result.
+* Payloads carry `v: 1`. `KeyAuthPayload` / `EncryptedPayload` validated with `isKeyAuthPayload` / `isEncryptedPayload`.
+* Typed errors: `SecureE2EError`, `InvalidPayloadError`, `SignatureInvalidError`, `IdentityMismatchError`, `DecryptionError`, `NotInitializedError`, `StorageError`.
+* `IKeyStorageProvider` now stores `{ privateKey, publicKey }` `CryptoKey`s; `requiresExtractableKeys` lets JWK-only providers opt in. `IndexedDBProvider` takes `{ dbName, storeName, recordId, migrateLegacyLocalStorage }`.
+* Vue is an optional peer dependency; the core has no framework dependency.
+* Binary messages (`Uint8Array`) via `encryptMessage` / `decryptBytes`.
+* `getIdentityPublicKey()`, `getIdentityFingerprint()`, `resetIdentity()`, `verifyRemotePayload()`.
+
+### Tooling
+* Tests rewritten against real Web Crypto (no mocks) incl. MITM, tampering, AAD, migration and concurrency cases.
+* CI workflow on push/PR; publish workflow now typechecks and publishes with provenance.
+* Scaffold files and broken demos removed; new two-peer `playground/` (`npm run dev`).
+* `dist/` no longer tracked in git; `prepublishOnly` runs typecheck, tests and build.
+
 ## [0.4.2] (Persistent Storage Migration)
 * **Feature:** Implemented the persistent, asynchronous `IndexedDBProvider` to store Long-Term Identity (LTID) key sets securely.
 

@@ -1,62 +1,86 @@
+import { exportKeyJwk, importEcdsaJwk } from '../core/crypto';
+import { StorageError } from '../core/errors';
+import type { IKeyStorageProvider, StoredIdentity } from './types';
 
-import type {
-    IKeyStorageProvider,
-    LTIDKeySet, 
-} from './index';
+/** Key used by securee2e 0.4.0; still read so existing identities survive the upgrade. */
+export const LEGACY_LOCAL_STORAGE_KEY = 'securee2e-ltid-v0-4-0';
+const DEFAULT_STORAGE_KEY = 'securee2e/identity/v1';
 
-/**
- * InMemoryStorageProvider: The default fallback provider. Keys are lost on page refresh.
- * It is synchronous in execution but wrapped in Promises to satisfy the IKeyStorageProvider interface.
- */
-export class InMemoryStorageProvider implements IKeyStorageProvider {
-    // This is a private, in-memory variable that holds the keys for the current session.
-    private store: LTIDKeySet | null = null;
-    private storageKey: string = 'securee2e-ltid-inmemory-mock'; // Placeholder key
+interface SerializedIdentity {
+    ecdsaPrivateKeyJwk: JsonWebKey;
+    ecdsaPublicKeyJwk: JsonWebKey;
+}
 
-    async load(): Promise<LTIDKeySet | null> {
-        // Return a deep clone to prevent direct manipulation of the stored object
-        return this.store ? JSON.parse(JSON.stringify(this.store)) : null;
-    }
-
-    async save(keys: LTIDKeySet): Promise<void> {
-        this.store = keys;
-    }
-
-    async clear(): Promise<void> {
-        this.store = null;
-    }
+export interface LocalStorageProviderOptions {
+    /** localStorage key to use. Defaults to `securee2e/identity/v1`. */
+    storageKey?: string;
 }
 
 /**
- * LocalStorageProvider (Synchronous Persistence): Persists keys using the browser's localStorage.
- * It is provided for environments where IndexedDB is unavailable or not desired.
+ * Persists the identity in `window.localStorage` as JWK.
+ *
+ * ⚠️ localStorage can only hold strings, so the private key has to be exported.
+ * That means the key material sits in plaintext where any script on the origin
+ * can read it. Prefer `IndexedDBProvider` (the default), which stores a
+ * non-extractable `CryptoKey`. This provider exists for environments without
+ * IndexedDB or for backwards compatibility.
  */
 export class LocalStorageProvider implements IKeyStorageProvider {
-    private storageKey: string = 'securee2e-ltid-v0-4-0';
+    readonly requiresExtractableKeys = true;
+    private readonly storageKey: string;
 
-    async load(): Promise<LTIDKeySet | null> {
-        const stored = localStorage.getItem(this.storageKey);
-        if (stored) {
-            try {
-                // Parse the JSON string back into the LTIDKeySet object
-                return JSON.parse(stored) as LTIDKeySet;
-            } catch (e) {
-                console.error("Failed to parse stored LTID key set from localStorage:", e);
-                // Clear corrupted data to prevent future errors
-                localStorage.removeItem(this.storageKey);
-                return null;
-            }
-        }
-        return null;
+    constructor(options: LocalStorageProviderOptions = {}) {
+        this.storageKey = options.storageKey ?? DEFAULT_STORAGE_KEY;
     }
 
-    async save(keys: LTIDKeySet): Promise<void> {
-        // Since CryptoKey objects were exported as JWKs, they are now plain JS objects
-        // and safe to serialize as JSON for storage.
-        localStorage.setItem(this.storageKey, JSON.stringify(keys));
+    static isAvailable(): boolean {
+        try {
+            return typeof localStorage !== 'undefined';
+        } catch {
+            return false;
+        }
+    }
+
+    async load(): Promise<StoredIdentity | null> {
+        if (!LocalStorageProvider.isAvailable()) return null;
+
+        const raw = localStorage.getItem(this.storageKey) ?? localStorage.getItem(LEGACY_LOCAL_STORAGE_KEY);
+        if (!raw) return null;
+
+        let parsed: SerializedIdentity;
+        try {
+            parsed = JSON.parse(raw) as SerializedIdentity;
+        } catch {
+            // Corrupted entry: drop it rather than failing forever.
+            localStorage.removeItem(this.storageKey);
+            return null;
+        }
+        try {
+            // Re-import as extractable so the identity can be re-saved under the new key if it came from the legacy one.
+            const [privateKey, publicKey] = await Promise.all([
+                importEcdsaJwk(parsed.ecdsaPrivateKeyJwk, true),
+                importEcdsaJwk(parsed.ecdsaPublicKeyJwk, true),
+            ]);
+            return { privateKey, publicKey };
+        } catch (cause) {
+            throw new StorageError('Failed to import identity from localStorage.', cause);
+        }
+    }
+
+    async save(identity: StoredIdentity): Promise<void> {
+        if (!LocalStorageProvider.isAvailable()) {
+            throw new StorageError('localStorage is not available.');
+        }
+        const serialized: SerializedIdentity = {
+            ecdsaPrivateKeyJwk: await exportKeyJwk(identity.privateKey),
+            ecdsaPublicKeyJwk: await exportKeyJwk(identity.publicKey),
+        };
+        localStorage.setItem(this.storageKey, JSON.stringify(serialized));
     }
 
     async clear(): Promise<void> {
+        if (!LocalStorageProvider.isAvailable()) return;
         localStorage.removeItem(this.storageKey);
+        localStorage.removeItem(LEGACY_LOCAL_STORAGE_KEY);
     }
 }

@@ -13,35 +13,29 @@ jobs:
     permissions:
       contents: read # Required to checkout code
       id-token: write # Required for OIDC/Trusted Publishers
-      packages: write # Optional, if you use GitHub Packages
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js for Build and Test
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Install Dependencies
         run: npm ci
 
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Run Tests
-        run: npm run test
+        run: npm test
 
       - name: Build Library
         run: npm run build
 
-      # --- CONSOLIDATED PUBLISHING STEP ---
-      - name: Configure NPM & Publish
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org' # Sets the registry URL
-          # By including the permissions: id-token: write and
-          # the registry-url, setup-node implicitly handles the OIDC token exchange.
-
-      - name: Run NPM Publish
-        run: npm publish --access public
+      - name: Publish
+        run: npm publish --access public --provenance

@@ -1,246 +1,160 @@
-## securee2e: Vue Composable for End-to-End Encryption
+# securee2e
 
-`securee2e` is a straightforward Vue 3 composable built on the native **Web Cryptography API** to facilitate secure **Diffie-Hellman Key Exchange (ECDH)** and **AES-GCM** symmetric encryption, **now with ECDSA signature for public key authentication.**
+End-to-end encryption for the browser, built on the native **Web Crypto API**. Framework-agnostic core with an optional **Vue 3 composable**.
 
-✨ Features
-----------
+- **Authenticated key exchange** — ephemeral ECDH P-256 keys, signed by a persistent ECDSA P-256 identity key.
+- **Identity pinning** — verify the remote identity by public key or fingerprint to actually stop man-in-the-middle attacks.
+- **Proper key derivation** — ECDH → HKDF-SHA256 → AES-256-GCM, bound to the session transcript.
+- **Non-extractable keys** — the identity private key is stored in IndexedDB as a `CryptoKey`; its bytes never leave the browser's crypto engine, even to XSS.
+- **AES-256-GCM messaging** — fresh 96-bit nonce per message, optional additional authenticated data (AAD), strings or binary.
+- **Typed errors**, zero runtime dependencies, ESM + CJS, full TypeScript types.
 
-*   **ECDH P-256 Key Agreement:** Uses the standard Elliptic Curve Diffie-Hellman with the P-256 curve for robust key agreement.
-    
-*   **ECDSA P-256 Key Authentication:** Uses Elliptic Curve Digital Signature Algorithm with the P-256 curve to sign and verify public keys, **preventing Man-in-the-Middle (MITM) attacks.**
-    
-*   **High-Level API Wrappers (v0.3.1):** Simplified functions (`generateLocalAuthPayload`, `deriveSecretFromRemotePayload`, etc.) abstract the 6-step handshake into two simple calls, dramatically simplifying integration.
-
-*   **AES-256 GCM Encryption:** Employs the highly secure AES-GCM (256-bit) algorithm for encrypting messages.
-    
-*   **Security Focused:** Private keys are generated as **non-extractable** by default.
-    
-*   **Base64 Serialization:** Helper functions for easy, network-ready transmission of keys, signatures, IVs, and ciphertext via URL-safe Base64 strings.
-    
-📦 Installation and Setup
--------------------------
-
-Since this is intended to be a reusable library, you would typically install it using a package manager:
-
-```Bash
-# Using npm  
+```bash
 npm install securee2e
-# Using yarn
-yarn add securee2e
+# Vue users need vue >= 3.3 (it is an optional peer dependency)
 ```
 
-Usage in Project
-----------------
+## Quick start (any framework)
 
-Import and use the composable directly in any Vue component or JavaScript file:
+```ts
+import { createSecureE2E, IdentityMismatchError } from 'securee2e';
 
-```TypeScript
-import { useDiffieHellman } from 'securee2e';
-// ...
-```
-## ⚙️ Data Structures and Payloads
+const e2e = createSecureE2E(); // identity is loaded/generated on first use (IndexedDB)
 
-The library exchanges data using these required structures:
+// 1. Each side creates a signed, ephemeral key-exchange payload and sends it to the other.
+const local = await e2e.generateLocalAuthPayload();
+send(local.payload); // { v: 1, ecdhPublicKey, ecdsaPublicKey, signature } — plain JSON
 
-| Type | Structure | Description | 
- | ----- | ----- | ----- | 
-| **KeyAuthPayload** | `{ ecdhPublicKey: string, ecdsaPublicKey: string, signature: string }` | The full payload transmitted during the key exchange handshake. | 
-| **EncryptedPayload** | `{ iv: string, ciphertext: string }` | The result of `encryptData`. Both fields are Base64 strings and are required for decryption. |
-| **LocalAuthResult** | `{ payload: KeyAuthPayload, ecdhPrivateKey: CryptoKey }` | Return object from the high-level key generation function. Contains the sharable payload and local ephemeral private key. |
+// 2. Verify the remote payload and derive the shared session key.
+//    Pin the remote identity (key or fingerprint) so a MITM can't substitute their own.
+const sessionKey = await e2e.deriveSecretFromRemotePayload(local, remotePayload, {
+  expectedFingerprint: knownFingerprintOfBob, // or expectedIdentityKey: knownPublicKeyOfBob
+});
 
-🚀 High-Level Usage: Simplified E2E Workflow (v0.3.4)
--------------------------------------------------------
-With the introduction of the high-level wrappers, the entire authenticated key exchange is reduced to a few calls. This approach enforces authentication (LTID signing) to prevent Man-in-the-Middle attacks.
-
-```typescript
-import { useDiffieHellman, KeyAuthPayload } from 'securee2e';
-
-const {
-  // High-Level functions:
-  generateLocalAuthPayload,
-  deriveSecretFromRemotePayload,
-  encryptMessage,
-  decryptMessage
-} = useDiffieHellman();
-
-
-async function runSimplifiedExchange(bobPayload: KeyAuthPayload) {
-
-  // 1. ALICE'S AUTHENTICATED KEY GENERATION (1 call)
-  // The LTID key is automatically loaded/generated and used to sign the payload.
-  // The LTID key is automatically loaded/generated using the IndexedDBProvider`
-  const aliceLocalAuth = await generateLocalAuthPayload(); 
-
-  // Extract the ephemeral private key and the public payload to send
-  const aliceEcdhPrivateKey = aliceLocalAuth.keys[0]; // Access key from the returned 'keys' array
-  const alicePayload = aliceLocalAuth.payload;
-
-  // 3. BOB'S PAYLOAD IS RECEIVED
-  // (Assuming bobPayload is a valid KeyAuthPayload received from the network)
-
-  // 4. DERIVE SHARED SECRET (1 call: imports, verifies, and derives)
-  // This function uses the LTID public key inside 'bobPayload' to verify the signature.
-  const aliceSharedSecret = await deriveSecretFromRemotePayload(
-      aliceEcdhPrivateKey,
-      bobPayload
-  );
-  
-  // NOTE: If the signature verification fails, this function throws an error 
-  // and the handshake is aborted, protecting against MITM attacks.
-
-  // 5. ENCRYPT & DECRYPT
-  const plaintext = "This is the simplified secure message.";
-  const encryptedPayload = await encryptMessage(aliceSharedSecret, plaintext);
-
-  // Simulate Bob decrypting using his identical shared secret
-  // (Assuming Bob has his identical sharedSecret derived from Alice's payload)
-  const decryptedMessage = await decryptMessage(aliceSharedSecret, encryptedPayload);
-
-  console.log("Decrypted Message:", decryptedMessage); 
-}
-```
-### 💾 Persistence and Key Management
-Your Long-Term Identity (LTID) keys are now **persistently stored using IndexedDB** by default, meaning they survive page refreshes and browser restarts.
-
-The library achieves this using the **Provider Pattern** based on the `IKeyStorageProvider` interface, allowing you to swap out storage mechanisms easily.
-
-| Default Provider | Persistence | Notes | 
- | ----- | ----- | ----- | 
-| **IndexedDBProvider** (NEW DEFAULT) | **Persistent** | Uses the asynchronous IndexedDB API for highly secure, robust persistence of LTID keys. | 
-| **LocalStorageProvider** (Option) | Persistent | Saves LTID keys to `window.localStorage`. Available as an alternative. | 
-| **InMemoryStorageProvider** (Option) | Transient | Keys are lost when the page is closed/refreshed. |
-
-#### Swapping Storage Providers
-While the default is the `IndexedDBProvider`, you can inject any custom storage solution that implements `IKeyStorageProvider`.
-
-To switch providers, import `setCurrentStorageProvider` and your chosen provider class *before* calling `useDiffieHellman()`.
-
-```typescript
-import { setCurrentStorageProvider, InMemoryStorageProvider, IKeyStorageProvider } from 'securee2e';
-
-// Example: Switch to non-persistent, in-memory storage
-setCurrentStorageProvider(new InMemoryStorageProvider());
-
-// Example: If you wrote a custom provider
-// class IndexedDBProvider implements IKeyStorageProvider { ... }
-// setCurrentStorageProvider(new IndexedDBProvider());
-
-// Now, useDiffieHellman() will use the new provider instance
-const { generateLocalAuthPayload } = useDiffieHellman();
-
-```
-📖 Low-Level Usage: The Authenticated E2E Workflow (6 Steps)
--------------------------------------------------------
-
-The E2E process now requires key generation for _both_ encryption (ECDH) and authentication (ECDSA) and involves six sequential steps:
-
-1.  **Generate Keys:** Both parties generate their own public/private **ECDH key pair** (for encryption) and **ECDSA key pair** (for authentication).
-    
-2.  **Sign Public Key:** Each party uses their **ECDSA private key** to sign their **ECDH public key**.
-    
-3.  **Exchange Payloads:** Parties send a complete payload containing their **ECDH public key**, **ECDSA public key**, and the **Signature** to each other.
-    
-4.  **Verify Signature:** The recipient uses the remote party's **ECDSA public key** to verify the signature on the **ECDH public key**. If validation fails, the exchange is aborted (MITM protection).
-    
-5.  **Derive Secret:** If verified, each party combines their **ECDH private key** with the remote party's **ECDH public key** to derive an identical, shared symmetric secret (AES-GCM Key).
-    
-6.  **Encrypt/Decrypt:** Use the shared secret to encrypt and decrypt messages.
-    
-### Example: Alice Sends a Secure Message to Bob (Authenticated)
-
-This example demonstrates the full, secure workflow including key signing and verification.
-
-```TypeScript
-
-import { useDiffieHellman, KeyAuthPayload } from 'securee2e';
-
-const {
-generateKeyPair, 
-generateLongTermIdentityKeys, // Added for consistency 
-exportPublicKeyBase64,
-exportSigningPublicKeyBase64,
-importRemotePublicKeyBase64,
-importRemoteSigningPublicKeyBase64,
-signPublicKey,
-verifySignature,
-deriveSharedSecret,
-encryptData,
-decryptData
-} = useDiffieHellman();
-
-// KeyAuthPayload definition (as an interface for clarity)
-// NOTE: This interface is already included via 'import { KeyAuthPayload } from 'securee2e''
-/*
-interface KeyAuthPayload {
-    ecdhPublicKey: string; // Alice's ECDH key
-    ecdsaPublicKey: string; // Alice's ECDSA key (LTID Public Key)
-    signature: string; // Signature over the ECDH key
-}
-*/
-
-async function runAuthenticatedExchange(bobPayload: KeyAuthPayload) {
-  // --- 1. LOAD/GENERATE LTID KEYS & EPHEMERAL ECDH KEYS ---
-  // Alice loads her persistent identity (signing) keys
-  const aliceLtidKeys = await generateLongTermIdentityKeys(); // Now uses IndexedDBProvider internally
-  
-  // Alice generates her session (encryption) keys
-  const aliceEcdhKeys = await generateKeyPair();
-
-  // --- 2. SIGN PUBLIC KEY & 3. PREPARE PAYLOAD ---
-  const ecdhPubKeyBase64 = await exportPublicKeyBase64(aliceEcdhKeys.publicKey);
-
-  // Alice signs her *ephemeral* ECDH public key using her *LTID* private key
-  const signature = await signPublicKey(
-      aliceLtidKeys.ecdsaPrivateKey, // Use LTID Private Key for signing
-      aliceEcdhKeys.publicKey
-  );
-
-  const alicePayload: KeyAuthPayload = {
-      ecdhPublicKey: ecdhPubKeyBase64,
-      ecdsaPublicKey: await exportSigningPublicKeyBase64(aliceLtidKeys.ecdsaPublicKey), // Use LTID Public Key
-      signature: signature
-  };
-
-  // --- 4. BOB RECEIVES & ALICE VERIFIES BOB'S KEY (SIMULATED) ---
-  const bobEcdhKey = await importRemotePublicKeyBase64(bobPayload.ecdhPublicKey);
-  // Import the remote party's LTID public key
-  const bobEcdsaKey = await importRemoteSigningPublicKeyBase64(bobPayload.ecdsaPublicKey); 
-
-  const isSignatureValid = await verifySignature(
-      bobEcdsaKey, // Use Bob's LTID Public Key for verification
-      bobEcdhKey,
-      bobPayload.signature
-  );
-
-  if (!isSignatureValid) {
-      throw new Error("MITM ALERT: Remote key signature is invalid.");
-  }
-  console.log("Key Verified Successfully. Connection is authenticated.");
-
-  // --- 5. DERIVE SHARED SECRET ---
-  const aliceSharedKey = await deriveSharedSecret(
-      aliceEcdhKeys.privateKey, 
-      bobEcdhKey 
-  );
-
-  // --- 6. ENCRYPT & DECRYPT (ALICE SENDS) ---
-  const plaintext = "This message is secretly authenticated.";
-  const encryptedPayload = await encryptData(aliceSharedKey, plaintext);
-  const { iv, ciphertext } = encryptedPayload; // Both are URL-safe Base64 strings
-
-  // Simulate Bob decrypting using his identical shared secret
-  const decryptedMessage = await decryptData(aliceSharedKey, iv, ciphertext);
-
-  console.log("Decrypted Message:", decryptedMessage); 
-}
-
+// 3. Encrypt / decrypt.
+const encrypted = await e2e.encryptMessage(sessionKey, 'hello', { aad: 'chat:42|seq:1' });
+const plaintext = await e2e.decryptMessage(sessionKey, encrypted, { aad: 'chat:42|seq:1' });
 ```
 
-⚠️ Security Notes
------------------
+### Sharing your identity so peers can pin you
 
-1.  **Authentication is Crucial:** This library now includes ECDSA signature and verification to prevent **Man-in-the-Middle (MITM) attacks**. Always verify the remote party's key using verifySignature before deriving the shared secret.
-    
-2.  **Non-Extractable Private Keys:** The generateKeyPair and generateSigningKeys functions set the private keys as non-extractable. This is a security best practice, preventing accidental exposure of the key material through functions like exportKey.
-    
-3.  **Initialization Vector (IV) is Mandatory:** For AES-GCM encryption, a unique 12-byte IV is generated for **every single message**. This IV is not secret and must be transmitted along with the ciphertext. Reusing the same IV will fatally compromise security, typically as part of the **EncryptedPayload** object. Reusing the same IV will fatally compromise security.
+```ts
+await e2e.getIdentityPublicKey();   // Base64 SPKI — store it in your user directory
+await e2e.getIdentityFingerprint(); // "A1B2 C3D4 …" — show it in the UI / QR code for out-of-band comparison
+```
+
+### Trust on first use (TOFU)
+
+If you have no directory, verify first, remember the fingerprint, and pin it from then on:
+
+```ts
+const { fingerprint } = await e2e.verifyRemotePayload(remotePayload); // throws if malformed or badly signed
+const known = trustStore.get(remoteUserId);
+if (known && known !== fingerprint) throw new Error('Identity changed! Verify out-of-band.');
+trustStore.set(remoteUserId, fingerprint);
+const sessionKey = await e2e.deriveSecretFromRemotePayload(local, remotePayload, { expectedFingerprint: fingerprint });
+```
+
+## Vue 3
+
+```ts
+import { useSecureE2E } from 'securee2e/vue';
+
+const { isReady, identityFingerprint, error, generateLocalAuthPayload, deriveSecretFromRemotePayload, encryptMessage, decryptMessage } =
+  useSecureE2E();
+```
+
+```vue
+<p v-if="error">{{ error.message }}</p>
+<p v-else-if="!isReady">Loading identity…</p>
+<code v-else>{{ identityFingerprint }}</code>
+```
+
+`useSecureE2E()` starts loading the identity immediately (pass `{ autoInit: false }` to defer) and exposes the same methods as the core plus reactive `isReady`, `isInitializing`, `error`, `identityPublicKey`, `identityFingerprint`, and `resetIdentity()`. It does not require a component instance. Run `npm run dev` for a two-peer playground.
+
+## API
+
+### `createSecureE2E(options?) → SecureE2E`
+
+| Option    | Default                                       | Description                          |
+| --------- | --------------------------------------------- | ------------------------------------ |
+| `storage` | `IndexedDBProvider` (in-memory outside browsers) | Where the long-term identity lives. |
+
+| Method                                                    | Description                                                                                                  |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `init()`                                                  | Loads or creates the identity. Optional — every method calls it as needed.                                   |
+| `isReady`                                                 | `true` once the identity is loaded.                                                                          |
+| `getIdentityPublicKey()`                                  | Identity public key (Base64 SPKI).                                                                           |
+| `getIdentityFingerprint()`                                | SHA-256 fingerprint of the identity key, `XXXX XXXX …` (16 groups).                                          |
+| `resetIdentity()`                                         | Deletes the identity and generates a new one.                                                                |
+| `generateLocalAuthPayload()`                              | → `{ payload, ecdhPrivateKey }`. Send `payload`; keep the result for `deriveSecretFromRemotePayload`.        |
+| `verifyRemotePayload(remote, options?)`                   | Checks shape, signature and (optionally) identity. → `{ identityKey, fingerprint }`.                         |
+| `deriveSecretFromRemotePayload(local, remote, options?)`  | Verifies and derives the AES-256-GCM session key.                                                            |
+| `encryptMessage(key, plaintext, { aad? })`                | `plaintext` is a string or `Uint8Array`. → `{ v, iv, ciphertext }`.                                          |
+| `decryptMessage(key, payload, { aad? })` / `decryptBytes` | Returns a string / `Uint8Array`.                                                                             |
+
+`VerifyOptions`: `expectedIdentityKey?: string` (Base64 SPKI) and/or `expectedFingerprint?: string` (case/spacing-insensitive).
+
+### Errors
+
+All errors extend `SecureE2EError` and carry a `code`:
+
+| Class                    | Code                 | When                                                                  |
+| ------------------------ | -------------------- | --------------------------------------------------------------------- |
+| `InvalidPayloadError`    | `INVALID_PAYLOAD`    | Wrong shape/version, or a key that cannot be imported.                |
+| `SignatureInvalidError`  | `SIGNATURE_INVALID`  | The ephemeral key was not signed by the identity key in the payload.  |
+| `IdentityMismatchError`  | `IDENTITY_MISMATCH`  | Pinned identity differs (`.expected`, `.actual`). **This is the MITM alarm.** |
+| `DecryptionError`        | `DECRYPTION_FAILED`  | Wrong key, wrong AAD, or tampered ciphertext.                         |
+| `NotInitializedError`    | `NOT_INITIALIZED`    | `deriveSecretFromRemotePayload` before the identity loaded.           |
+| `StorageError`           | `STORAGE_ERROR`      | The storage provider failed.                                          |
+
+### Storage providers
+
+| Provider                 | Persistent | Private key extractable | Notes                                                                                   |
+| ------------------------ | ---------- | ----------------------- | --------------------------------------------------------------------------------------- |
+| `IndexedDBProvider`      | ✅         | **No**                  | Default. Stores `CryptoKey` objects. Options: `dbName`, `storeName`, `recordId`, `migrateLegacyLocalStorage`. |
+| `InMemoryStorageProvider`| ❌         | No                      | Tests, SSR, deliberately ephemeral identities.                                          |
+| `LocalStorageProvider`   | ✅         | Yes (plaintext JWK)     | Only if IndexedDB is unavailable. Readable by any script on the origin.                 |
+
+```ts
+import { createSecureE2E, InMemoryStorageProvider } from 'securee2e';
+const e2e = createSecureE2E({ storage: new InMemoryStorageProvider() });
+```
+
+Implement `IKeyStorageProvider` (`load` / `save` / `clear`, optional `requiresExtractableKeys`) to plug in anything else. Instances that share a provider share an identity; use `recordId` to keep several identities in one browser.
+
+### Low-level primitives
+
+Everything the high-level API is built from is exported too: `generateEphemeralKeyPair`, `generateIdentityKeyPair`, `exportPublicKeyBase64`, `importEcdhPublicKey`, `importEcdsaPublicKey`, `signEcdhPublicKey`, `verifyEcdhPublicKeySignature`, `deriveSessionKey`, `encrypt`, `decrypt`, `decryptToBytes`, `fingerprint`, `bytesToBase64`, `base64ToBytes`, and `IdentityManager`.
+
+## Wire format (v1)
+
+| Field                    | Encoding                                                                                |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| `ecdhPublicKey`, `ecdsaPublicKey` | SPKI DER, standard Base64.                                                     |
+| `signature`              | ECDSA P-256 / SHA-256, raw `r‖s` (IEEE P1363, 64 bytes — *not* DER), Base64, over `"securee2e/v1/ecdh-public-key" ‖ SPKI(ecdhPublicKey)`. |
+| Session key              | `HKDF-SHA256(ECDH shared secret, salt = "", info = "securee2e/v1/aes-256-gcm|" + sorted(SPKI_A, SPKI_B))` → AES-256-GCM. |
+| `iv`                     | 12 random bytes, Base64.                                                                |
+| `ciphertext`             | AES-GCM output incl. 16-byte tag, Base64.                                               |
+
+Decoding accepts URL-safe Base64 and missing padding.
+
+## Security notes
+
+1. **Pin identities.** The signature inside a payload only proves the sender holds the identity key *in that payload*. Without `expectedIdentityKey` / `expectedFingerprint` (or comparing fingerprints out-of-band), an attacker can simply present their own payload. `IdentityMismatchError` is the signal that something is wrong.
+2. **Session keys are per handshake.** Ephemeral keys give forward secrecy between sessions, not within one. Rotate sessions as often as your threat model needs; there is no ratchet.
+3. **Use AAD for replay/reorder protection.** Include a sequence number or message id in `aad` and check it on receipt — AES-GCM authenticates it without encrypting it.
+4. **The identity is only as safe as the origin.** A non-extractable key cannot be exfiltrated, but malicious code on your origin could still *use* it. Standard XSS hygiene applies.
+5. **`resetIdentity()` is a new identity.** Peers who pinned you will (correctly) reject the new key until they re-verify.
+
+## Upgrading from 0.4.x
+
+- `useDiffieHellman()` is gone. Use `createSecureE2E()` (any framework) or `useSecureE2E()` from `securee2e/vue`.
+- `generateLocalAuthPayload()` returns `{ payload, ecdhPrivateKey }` instead of a `keys` tuple; pass the whole result to `deriveSecretFromRemotePayload(local, remote, options)`.
+- Payloads carry `v: 1`, signatures are domain-separated and the session key goes through HKDF — 0.5 peers cannot talk to 0.4 peers.
+- `setCurrentStorageProvider()` is replaced by the `storage` option.
+- Existing 0.4.0 identities in localStorage are migrated into IndexedDB (as non-extractable keys) on first load.
+
+## License
+
+MIT

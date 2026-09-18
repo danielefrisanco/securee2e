@@ -1,165 +1,136 @@
-import type {
-    LTIDKeySet, IKeyStorageProvider
-} from './index';
-/**
- * Configuration for the IndexedDB store.
- */
-const DB_NAME = 'securee2e-db'; // This is the name the provider will ALWAYS use.
+import { importEcdsaJwk } from '../core/crypto';
+import { StorageError } from '../core/errors';
+import { LEGACY_LOCAL_STORAGE_KEY } from './LocalStorageProvider';
+import type { IKeyStorageProvider, StoredIdentity } from './types';
+
+export interface IndexedDBProviderOptions {
+    /** Database name. Defaults to `securee2e-db`. */
+    dbName?: string;
+    /** Object store name. Defaults to `identity`. */
+    storeName?: string;
+    /** Record key inside the store. Defaults to `default`. Use different values for multiple identities. */
+    recordId?: string;
+    /**
+     * When no identity is found, look for a 0.4.0 identity in localStorage,
+     * import it (non-extractable), persist it here and delete the old entry.
+     * Defaults to `true`.
+     */
+    migrateLegacyLocalStorage?: boolean;
+}
+
 const DB_VERSION = 1;
-const STORE_NAME = 'ltid_keys';
-const KEY_RECORD_ID = 'user_ltid_keys';
 
 /**
- * IndexedDB Key Storage Provider implementation.
- * Handles the asynchronous persistence of the Long-Term Identity (LTID) keys.
+ * Default provider. Stores `CryptoKey` objects directly via IndexedDB's
+ * structured clone, so the private key can stay **non-extractable**: it can be
+ * used by this origin but its bytes can never be read out, even by XSS.
  */
 export class IndexedDBProvider implements IKeyStorageProvider {
+    private readonly dbName: string;
+    private readonly storeName: string;
+    private readonly recordId: string;
+    private readonly migrateLegacy: boolean;
 
-    /**
-     * Opens a connection to the IndexedDB database.
-     * If the database or object store does not exist, it creates them.
-     * @returns A Promise that resolves to an IDBDatabase instance.
-     */
-    private openDatabase(): Promise<IDBDatabase> {
-        return new Promise((resolve, reject) => {
-            if (typeof window === 'undefined' || !window.indexedDB) {
-                // If the polyfill failed or not in a browser/test environment
-                console.error("IndexedDB is not supported or available.");
-                return reject(new Error("IndexedDB not supported."));
-            }
-
-            const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-            // This fires when a version change is needed (creation or upgrade)
-            request.onupgradeneeded = (event) => {
-                const db = (event.target as IDBOpenDBRequest).result;
-                // Create the object store where key data will be saved
-                if (!db.objectStoreNames.contains(STORE_NAME)) {
-                    db.createObjectStore(STORE_NAME);
-                    console.debug(`IndexedDB: Created object store ${STORE_NAME}`);
-                }
-            };
-
-            // Success handler: database is ready
-            request.onsuccess = (event) => {
-                resolve((event.target as IDBOpenDBRequest).result);
-            };
-
-            // Error handler
-            request.onerror = (event) => {
-                console.error("IndexedDB Error:", (event.target as IDBOpenDBRequest).error);
-                reject((event.target as IDBOpenDBRequest).error);
-            };
-        });
+    constructor(options: IndexedDBProviderOptions = {}) {
+        this.dbName = options.dbName ?? 'securee2e-db';
+        this.storeName = options.storeName ?? 'identity';
+        this.recordId = options.recordId ?? 'default';
+        this.migrateLegacy = options.migrateLegacyLocalStorage ?? true;
     }
 
-    /**
-     * Helper to check if IndexedDB is available (useful for the fallback logic).
-     */
-    public isAvailable(): boolean {
-        return typeof window !== 'undefined' && !!window.indexedDB;
+    static isAvailable(): boolean {
+        try {
+            return typeof indexedDB !== 'undefined' && indexedDB !== null;
+        } catch {
+            return false;
+        }
     }
 
+    async load(): Promise<StoredIdentity | null> {
+        const stored = await this.withStore('readonly', (store) => store.get(this.recordId));
+        if (isStoredIdentity(stored)) return stored;
 
-    /**
-     * Reads the LTID keys from the IndexedDB.
-     * @returns A Promise that resolves to the LTIDKeySet or null if not found.
-     */
-    public async load(): Promise<LTIDKeySet | null> {
-        if (!this.isAvailable()) return null; // Defensive check
+        if (this.migrateLegacy) {
+            const migrated = await this.migrateFromLocalStorage();
+            if (migrated) return migrated;
+        }
+        return null;
+    }
+
+    async save(identity: StoredIdentity): Promise<void> {
+        await this.withStore('readwrite', (store) => store.put(identity, this.recordId));
+    }
+
+    async clear(): Promise<void> {
+        await this.withStore('readwrite', (store) => store.delete(this.recordId));
+    }
+
+    // --- internals ---
+
+    private async migrateFromLocalStorage(): Promise<StoredIdentity | null> {
+        let raw: string | null;
+        try {
+            raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(LEGACY_LOCAL_STORAGE_KEY);
+        } catch {
+            return null;
+        }
+        if (!raw) return null;
 
         try {
-            const db = await this.openDatabase();
-            return new Promise((resolve) => {
-                const transaction = db.transaction([STORE_NAME], 'readonly');
-                const store = transaction.objectStore(STORE_NAME);
-
-                const request = store.get(KEY_RECORD_ID);
-
-                request.onsuccess = () => {
-                    db.close();
-                    const data = request.result;
-                    resolve(data ? (data as LTIDKeySet) : null);
-                };
-
-                request.onerror = () => {
-                    db.close();
-                    console.warn("IndexedDB Load Warning: Failed to retrieve key, treating as null.");
-                    resolve(null);
-                };
-            });
-        } catch (error) {
-            console.error("IndexedDB Load Critical Error:", error);
+            const parsed = JSON.parse(raw) as { ecdsaPrivateKeyJwk: JsonWebKey; ecdsaPublicKeyJwk: JsonWebKey };
+            const identity: StoredIdentity = {
+                privateKey: await importEcdsaJwk(parsed.ecdsaPrivateKeyJwk, false),
+                publicKey: await importEcdsaJwk(parsed.ecdsaPublicKeyJwk, true),
+            };
+            await this.save(identity);
+            localStorage.removeItem(LEGACY_LOCAL_STORAGE_KEY);
+            return identity;
+        } catch {
+            // Unreadable legacy data: leave it alone and start fresh.
             return null;
         }
     }
 
-    /**
-     * Writes the LTID keys to the IndexedDB.
-     * @param keyset The LTIDKeySet object to save.
-     * @returns A Promise that resolves when the save is complete.
-     */
-    public async save(keyset: LTIDKeySet): Promise<void> {
-        if (!this.isAvailable()) return; // Defensive check
-
-        try {
-            const db = await this.openDatabase();
-            return new Promise((resolve, reject) => {
-                const transaction = db.transaction([STORE_NAME], 'readwrite');
-                const store = transaction.objectStore(STORE_NAME);
-
-                const request = store.put(keyset, KEY_RECORD_ID);
-
-                request.onsuccess = () => {
-                    db.close();
-                    console.debug("IndexedDB: LTID keys saved successfully.");
-                    resolve();
-                };
-
-                request.onerror = (event) => {
-                    db.close();
-                    const error = (event.target as IDBRequest).error;
-                    console.error("IndexedDB Save Error:", error);
-                    reject(error);
-                };
-            });
-        } catch (error) {
-            console.error("IndexedDB Save Critical Error:", error);
-            throw error;
-        }
+    private openDatabase(): Promise<IDBDatabase> {
+        return new Promise((resolve, reject) => {
+            if (!IndexedDBProvider.isAvailable()) {
+                return reject(new StorageError('IndexedDB is not available in this environment.'));
+            }
+            const request = indexedDB.open(this.dbName, DB_VERSION);
+            request.onupgradeneeded = () => {
+                const db = request.result;
+                if (!db.objectStoreNames.contains(this.storeName)) {
+                    db.createObjectStore(this.storeName);
+                }
+            };
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(new StorageError('Failed to open IndexedDB.', request.error));
+            request.onblocked = () => reject(new StorageError('IndexedDB open request was blocked.'));
+        });
     }
 
-    /**
-     * Clears the LTID keys from the IndexedDB store.
-     * @returns A Promise that resolves when the clear operation is complete.
-     */
-    public async clear(): Promise<void> {
-        if (!this.isAvailable()) return; // Defensive check
-        
+    /** Runs one request inside a transaction, closes the connection, and maps errors to StorageError. */
+    private async withStore<T>(
+        mode: IDBTransactionMode,
+        operation: (store: IDBObjectStore) => IDBRequest<T>,
+    ): Promise<T> {
+        const db = await this.openDatabase();
         try {
-            const db = await this.openDatabase();
-            return new Promise((resolve, reject) => {
-                const transaction = db.transaction([STORE_NAME], 'readwrite');
-                const store = transaction.objectStore(STORE_NAME);
-
-                const request = store.delete(KEY_RECORD_ID);
-
-                request.onsuccess = () => {
-                    db.close();
-                    console.debug("IndexedDB: LTID keys cleared successfully.");
-                    resolve();
-                };
-
-                request.onerror = (event) => {
-                    db.close();
-                    const error = (event.target as IDBRequest).error;
-                    console.error("IndexedDB Clear Error:", error);
-                    reject(error);
-                };
+            return await new Promise<T>((resolve, reject) => {
+                const tx = db.transaction(this.storeName, mode);
+                const request = operation(tx.objectStore(this.storeName));
+                tx.oncomplete = () => resolve(request.result);
+                tx.onerror = () => reject(new StorageError('IndexedDB transaction failed.', tx.error));
+                tx.onabort = () => reject(new StorageError('IndexedDB transaction aborted.', tx.error));
             });
-        } catch (error) {
-            console.error("IndexedDB Clear Critical Error:", error);
-            throw error;
+        } finally {
+            db.close();
         }
     }
+}
+
+function isStoredIdentity(value: unknown): value is StoredIdentity {
+    if (typeof value !== 'object' || value === null) return false;
+    const v = value as Record<string, unknown>;
+    return v.privateKey instanceof CryptoKey && v.publicKey instanceof CryptoKey;
 }

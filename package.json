@@ -1,32 +1,61 @@
 {
   "name": "securee2e",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "author": {
     "name": "Daniele Frisanco",
     "url": "https://www.linkedin.com/in/daniele-frisanco-9589835a/"
   },
-  "description": "Vue 3 composable for secure End-to-End Encryption (E2E) using Web Crypto API, featuring ECDH and authenticated key exchange with ECDSA.",
+  "description": "End-to-end encryption on the Web Crypto API: authenticated ECDH key exchange (ECDSA identity keys, HKDF, AES-256-GCM) with identity pinning. Framework-agnostic core plus a Vue 3 composable.",
   "license": "MIT",
   "type": "module",
-  "main": "./dist/securee2e.js",
-  "module": "./dist/securee2e.mjs",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/securee2e.mjs",
-      "require": "./dist/securee2e.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./vue": {
+      "types": "./dist/vue.d.ts",
+      "import": "./dist/vue.mjs",
+      "require": "./dist/vue.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "vue": ["./dist/vue.d.ts"]
     }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE.md"
+  ],
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build && vue-tsc --declaration --emitDeclarationOnly",
+    "build": "vite build && vue-tsc -p tsconfig.build.json",
     "preview": "vite preview",
-    "test": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "typecheck": "vue-tsc --noEmit -p tsconfig.app.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "peerDependencies": {
-    "vue": "^3.5.22"
+    "vue": "^3.3.0"
+  },
+  "peerDependenciesMeta": {
+    "vue": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/jsdom": "^27.0.0",
@@ -42,41 +71,23 @@
     "vue": "^3.5.22",
     "vue-tsc": "^3.1.0"
   },
-  "vitest": {
-    "environment": "jsdom",
-    "setupFiles": [
-      "./vitest.setup.js"
-    ],
-    "include": [
-      "__tests__/**/*.{ts,js}"
-    ],
-    "coverage": {
-      "reporter": [
-        "text",
-        "json",
-        "html"
-      ]
-    }
-  },
-  "files": [
-    "dist",
-    "src/composables/useDiffieHellman.ts",
-    "README.md",
-    "LICENSE.md"
-  ],
   "keywords": [
-    "vue",
-    "crypto",
     "e2e",
-    "diffie-hellman",
+    "end-to-end-encryption",
+    "webcrypto",
+    "ecdh",
+    "ecdsa",
+    "hkdf",
     "aes-gcm",
-    "ecdsa"
+    "diffie-hellman",
+    "vue",
+    "composable"
   ],
   "repository": {
     "type": "git",
     "url": "https://github.com/danielefrisanco/securee2e.git"
   },
-  "homepage": "https://github.com/danielefrisanco/securee2e/blob/main/README.md",
+  "homepage": "https://github.com/danielefrisanco/securee2e#readme",
   "bugs": {
     "url": "https://github.com/danielefrisanco/securee2e/issues"
   }

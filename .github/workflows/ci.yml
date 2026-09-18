@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Smoke-test the built package (ESM + CJS, core + vue)
+        run: |
+          node --input-type=module -e "import('./dist/index.mjs').then(m => { if (typeof m.createSecureE2E !== 'function') throw new Error('ESM core broken'); })"
+          node -e "if (typeof require('./dist/index.cjs').createSecureE2E !== 'function') throw new Error('CJS core broken')"
+          node -e "if (typeof require('./dist/vue.cjs').useSecureE2E !== 'function') throw new Error('CJS vue broken')"
+          test -f dist/index.d.ts && test -f dist/vue.d.ts

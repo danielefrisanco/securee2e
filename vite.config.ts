@@ -1,42 +1,47 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import vue from '@vitejs/plugin-vue';
-import { resolve } from 'path';
+import { fileURLToPath, URL } from 'node:url';
 
-export default defineConfig({
+const src = (p: string) => fileURLToPath(new URL(`./src/${p}`, import.meta.url));
+
+export default defineConfig(({ command }) => ({
   plugins: [vue()],
-  test: {
-    globals: true, // Use global APIs like 'it', 'expect'
-    environment: 'jsdom', // CRITICAL: Enables browser environment for 'window'
-    // CRITICAL: Tells Vitest where to find the setup file
-    setupFiles: [
-      './vitest.setup.js',
-      'fake-indexeddb/auto'
-    ],
-    // Glob patterns for finding test files
-    include: ['__tests__/**/*.{ts,js}'],
+
+  // `vite` / `vite preview` serve the playground; `vite build` builds the library; vitest uses the project root.
+  root: command === 'serve' && !process.env.VITEST ? 'playground' : undefined,
+
+  resolve: {
+    alias: {
+      'securee2e/vue': src('vue.ts'),
+      securee2e: src('index.ts'),
+    },
   },
+
   build: {
+    copyPublicDir: false,
+    sourcemap: true,
     lib: {
-      // Keeping the user's entry point, assuming src/index.ts correctly re-exports everything
-      entry: resolve(__dirname, 'src/index.ts'), 
-      name: 'securee2e',
-      // CRITICAL: Removed the generic fileName property to allow RollupOptions to control naming
+      entry: {
+        index: src('index.ts'),
+        vue: src('vue.ts'),
+      },
+      formats: ['es', 'cjs'],
+      // "type": "module" in package.json makes .js mean ESM, so CJS must be .cjs.
+      fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'mjs' : 'cjs'}`,
     },
     rollupOptions: {
       external: ['vue'],
-      // CRITICAL FIX: Explicitly define the output formats and file names
-      output: [
-        {
-          format: 'es', // ES Module (for 'module' field in package.json)
-          entryFileNames: 'securee2e.mjs',
-          globals: { vue: 'Vue' }
-        },
-        {
-          format: 'cjs', // CommonJS (for 'main' field in package.json)
-          entryFileNames: 'securee2e.js',
-          globals: { vue: 'Vue' }
-        }
-      ]
-    }
-  }
-});
+      output: { globals: { vue: 'Vue' } },
+    },
+  },
+
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['fake-indexeddb/auto'],
+    include: ['__tests__/**/*.test.ts'],
+    coverage: {
+      include: ['src/**/*.ts'],
+      reporter: ['text', 'html'],
+    },
+  },
+}));
